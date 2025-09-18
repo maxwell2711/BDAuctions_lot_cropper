@@ -9,40 +9,54 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import sv_ttk
 from PIL import Image, ImageTk
+from types import SimpleNamespace
+import csv
+
+progress = SimpleNamespace(
+    current=0,         # images completed
+    total=0,           # set when starting
+    current_file="",   # filename being processed
+    running=False      # worker alive flag
+)
 
 current_idx=0
 
 # Load YOLO model
 try:
-    model = YOLO("E:/Python Projects/auto_cropper/BDAuctions_lot_cropper/yolo11l.pt")
+    model = YOLO("E:/Python Projects/auto_cropper/BDAuctions_lot_cropper/yolov8x.pt")
     print("Model Loaded")
 except Exception as e:
     print(f"Failed to load model: {e}")
     messagebox.showinfo(f"Failed to load model: {e}")
 
-
 class CropperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Auto Cropper")
-        self.root.geometry("550x325")
+        self.root.geometry("500x160")
 
         self.input_dir = tk.StringVar()
         self.output_dir = tk.StringVar()
 
-        # Input Folder Selection
-        ttk.Label(root, text="Input Folder:").pack(pady=(10,0))
-        ttk.Entry(root, textvariable=self.input_dir, width=60).pack()
-        ttk.Button(root, text="Browse", command=self.select_input_folder).pack()
+        root.columnconfigure(1, weight=1)  # make the entry column stretch
 
-        # Output Folder Selection
-        ttk.Label(root, text="Output Folder:").pack(pady=(10,0))
-        ttk.Entry(root, textvariable=self.output_dir, width=60).pack()
-        ttk.Button(root, text="Browse", command=self.select_output_folder).pack()
+        # Row 0: Input
+        ttk.Label(root, text="Input Folder:").grid(row=0, column=0, padx=8, pady=(10,2), sticky="w")
+        ttk.Entry(root, textvariable=self.input_dir).grid(row=0, column=1, padx=4, pady=(10,2), sticky="ew")
+        ttk.Button(root, text="Browse 📂", command=self.select_input_folder).grid(row=0, column=2, padx=8, pady=(10,2))
 
-        # Run Button
-        ttk.Button(root, text="Run Cropper", command=self.run).pack(pady=40)
+        # Row 1: Output
+        ttk.Label(root, text="Output Folder:").grid(row=1, column=0, padx=8, pady=(30,8), sticky="w")
+        ttk.Entry(root, textvariable=self.output_dir).grid(row=1, column=1, padx=4, pady=2, sticky="ew")
+        ttk.Button(root, text="Browse 📂", command=self.select_output_folder).grid(row=1, column=2, padx=8, pady=2)
 
+        # Row 2: Actions (single row spanning all columns)
+        actions = ttk.Frame(root)
+        actions.grid(row=2, column=0, columnspan=3, padx=8, pady=(12,8), sticky="w")
+        ttk.Button(actions, text="Run Cropper⮩", command=self.run).pack(side="left", padx=6)
+        ttk.Button(actions, text="Review/Change Descriptions 🗊", command=self.skip_to_Export).pack(side="left", padx=6)
+        ttk.Button(actions, text="Open Review 🖻", command=self.skip_to_Review).pack(side="left", padx=6)
+    
     def select_input_folder(self):
         path = filedialog.askdirectory(title="Select Input Folder")
         if path:
@@ -62,17 +76,56 @@ class CropperGUI:
             return
         
         def begin_Review():
-            grouped_input = group_images_by_lot(in_dir)
+            # recompute AFTER the crop completes
+            grouped_input  = group_images_by_lot(in_dir)
             grouped_output = group_images_by_lot(out_dir)
-
             # grouped_input / grouped_output are dicts: lot_id(str) -> [paths...]
             all_lot_ids = set(grouped_input.keys()) | set(grouped_output.keys())
-            lot_list = numeric_first_sort(all_lot_ids)  # e.g., ['12','13','101','A5']
-            ReviewController(self.root, lot_list, grouped_input, grouped_output)
+            lot_list = numeric_first_sort(all_lot_ids) # e.g., ['12','13','101','A5']
+
+            
+
+            ReviewController(self.root, lot_list, grouped_input, grouped_output, self.begin_Export)
+            messagebox.showinfo("SUCCESS! Processing Complete",
+                                f"Cropped images saved to:\n{out_dir}")
 
         root.withdraw()
         run_cropper(in_dir, out_dir, self.root, begin_Review)
-        root.mainloop()
+    
+    def begin_Export(self, lot_list):
+        # pass the lot list the Export window expects
+        ExportWindow(self.root, lot_list)
+
+    def skip_to_Export(self):
+        in_dir = self.input_dir.get()
+        out_dir = self.output_dir.get()
+        if not os.path.isdir(in_dir) or not os.path.isdir(out_dir):
+            messagebox.showerror("Invalid Input", "Please select valid folders.")
+            return
+        # recompute AFTER the crop completes
+        grouped_input  = group_images_by_lot(in_dir)
+        grouped_output = group_images_by_lot(out_dir)
+        # grouped_input / grouped_output are dicts: lot_id(str) -> [paths...]
+        all_lot_ids = set(grouped_input.keys()) | set(grouped_output.keys())
+        lot_list = numeric_first_sort(all_lot_ids) # e.g., ['12','13','101','A5']
+        root.withdraw()
+        ExportWindow(self.root, lot_list)
+
+    def skip_to_Review(self):
+        in_dir = self.input_dir.get()
+        out_dir = self.output_dir.get()
+        if not os.path.isdir(in_dir) or not os.path.isdir(out_dir):
+            messagebox.showerror("Invalid Input", "Please select valid folders.")
+            return
+        # recompute AFTER the crop completes
+        grouped_input  = group_images_by_lot(in_dir)
+        grouped_output = group_images_by_lot(out_dir)
+        # grouped_input / grouped_output are dicts: lot_id(str) -> [paths...]
+        all_lot_ids = set(grouped_input.keys()) | set(grouped_output.keys())
+        lot_list = numeric_first_sort(all_lot_ids) # e.g., ['12','13','101','A5']
+        root.withdraw()
+        ReviewController(self.root, lot_list, grouped_input, grouped_output, self.begin_Export)
+
 
         
 # GUI progress window class
@@ -82,7 +135,7 @@ class ProgressWindow(tk.Toplevel):
     def __init__(self, master, total_items):
         super().__init__(master)
         self.title("Processing...")
-        self.geometry("400x150")
+        self.geometry("540x175")
         self.resizable(False, False)
 
         self.total_items = total_items
@@ -91,27 +144,76 @@ class ProgressWindow(tk.Toplevel):
         self.label_status = ttk.Label(self, text="Starting cropping...")
         self.label_status.pack(pady=(10, 5))
 
-        self.progress = ttk.Progressbar(self, length=300, mode='determinate', maximum=total_items)
-        self.progress.pack(pady=5)
+        # Indeterminate bar to “pulse” while one image is processing
+        self.busy = ttk.Progressbar(self, length=280, mode='indeterminate')
+        self.busy.pack(pady=(4, 6))
+        self.busy.start(12)  # animate
+        
+        # Determinate bar for overall progress
+        self.progress = ttk.Progressbar(self, length=480, mode='determinate', maximum=total_items)
+        self.progress.pack(pady=(45,6))
 
         self.label_eta = ttk.Label(self, text="Estimated time remaining: Calculating...")
-        self.label_eta.pack(pady=(5, 10))
+        self.label_eta.pack(pady=(0, 6))
 
         self.label_count = ttk.Label(self, text=f"Cropped 0 of {total_items}")
         self.label_count.pack()
 
+        # Handle user closing the progress window
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Kick off UI polling
+        self._poll_id = self.after(100, self._poll_progress)
+
+    def _on_close(self):
+        stop_event.set()
+        progress.running = False
+        # cancel pending poll callback if any
+        if self._poll_id is not None:
+            try: self.after_cancel(self._poll_id)
+            except Exception: pass
+            self._poll_id = None
+        try: self.destroy()
+        except tk.TclError: pass
+        on_root_close()   # centralized shutdown
+
     # Updates the progress window. 
     # Includes estimated time and number of images cropped out of the total images.
     # Also advances the progress bar
-    def update_progress(self, current):
-        elapsed = time.time() - self.start_time
-        rate = current / elapsed if elapsed > 0 else 0
-        remaining = (self.total_items - current) / rate if rate > 0 else 0
-        self.progress['value'] = current
-        self.label_status.config(text="Cropping in progress...")
-        self.label_eta.config(text=f"Estimated time remaining: {int(remaining)}s")
-        self.label_count.config(text=f"Cropped {current} of {self.total_items}")
-        self.update_idletasks()
+    def _poll_progress(self):
+        if not self.winfo_exists():
+            return
+        try:
+            # Smooth updates every 200ms regardless of worker speed
+            cur = min(progress.current, self.total_items)
+            self.progress['value'] = cur
+            self.label_count.config(text=f"Cropped {cur} of {self.total_items}")
+
+            # Status/ETA
+            elapsed = max(0.001, time.time() - self.start_time)
+            rate = cur / elapsed
+            remain = int((self.total_items - cur) / rate) if rate > 0 else 0
+            self.label_eta.config(text=f"Estimated time remaining: {remain}s")
+
+            # Show current file if available
+            if progress.current_file:
+                self.label_status.config(text=f"Cropping: {os.path.basename(progress.current_file)}")
+            else:
+                self.label_status.config(text="Cropping in progress...")
+
+        except tk.TclError:
+            return
+
+        # Keep polling while running and not done
+        if progress.running and cur < self.total_items and not stop_event.is_set():
+            self._poll_id = self.after(200, self._poll_progress)
+        else:
+            # Stop the busy marquee when done/stopped
+            self._poll_id = None
+            try:
+                self.busy.stop()
+            except tk.TclError:
+                pass
 
 def run_cropper(input_dir,output_dir,master,callback_func):
     # Mark input and output folders
@@ -121,32 +223,67 @@ def run_cropper(input_dir,output_dir,master,callback_func):
     
     image_files = [f for f in os.listdir(input_dir) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
 
+    # Init shared progress
+    progress.current = 0
+    progress.total = len(image_files)
+    progress.current_file = ""
+    progress.running = True
+
     # create window for the progress bar and info
     win = ProgressWindow(master, len(image_files))
 
     # Define cropping loop to be called on another thread
     # that isn't clogged with the GUI
     def crop_loop():
-        for i, filename in enumerate(image_files):
+        for filename in image_files:
+            if stop_event.is_set():
+                break
             input_path = os.path.join(input_dir, filename)
             output_path = os.path.join(output_dir, filename)
+
+            # Set “heartbeat” before the slow work starts
+            progress.current_file = input_path
+
             auto_crop_detected_objects(input_path, output_path)
-            win.update_progress(i)
 
-        # Notice of completion in progress window
-        win.label_status.config(text="Cropping Complete")
-        win.label_eta.config(text="Done.")
+            # Increment after each image completes
+            progress.current += 1
 
-        # Give time for it to be read
-        time.sleep(1)
+            if stop_event.is_set():
+                break
 
-        # Withdraw progress window for completion message
-        win.destroy()
+        progress.running = False
 
-        messagebox.showinfo("SUCCESS! Processing Complete", f"Cropped images saved to:\n{output_dir}")
+        # Finish UI on main thread
+        def finish_ui():
+            if win.winfo_exists():
+                if not win.winfo_exists():
+                    return
+                try:
+                    win.busy.stop()
+                except tk.TclError:
+                    pass
 
-        # Callback to the review display function when the thread closes.
-        master.after(0, callback_func)
+                if stop_event.is_set():
+                    # user cancelled: just close progress and re-show root
+                    try:
+                        win.destroy()
+                    except tk.TclError:
+                        pass
+                    try:
+                        master.deiconify()
+                    except Exception:
+                        pass
+                    return
+
+                # normal completion
+                win.label_status.config(text="Cropping Complete")
+                win.label_eta.config(text="Done.")
+                win.after(300, lambda: (
+                    win.destroy(),
+                    master.after(0, callback_func)
+                ))
+        master.after(0, finish_ui)
 
     # Work thread
     thread = threading.Thread(target=crop_loop, daemon=True)
@@ -161,7 +298,7 @@ def auto_crop_detected_objects(image_path, output_path):
         print(f"Failed to load {image_path}")
         return
 
-    results = model.predict(image_path, conf=0.000000001, imgsz=4800, verbose=False)[0]
+    results = model.predict(image_path, conf=0.0000000000001, imgsz=4800, verbose=False)[0]
 
     class_ids = [int(cls.item()) for cls in results.boxes.cls]
     class_names = [model.names[i] for i in class_ids]
@@ -220,7 +357,7 @@ def group_images_by_lot(folder):
         if match:
             lot_number = match.group(1)
             lot_dict[lot_number].append(os.path.join(folder, filename))
-    
+
     return lot_dict
 
 _IDX_PAT = re.compile(r"\((\d+)\)")
@@ -231,11 +368,18 @@ def _order_index(path_or_name, default_idx):
     if m:
         try:
             return int(m.group(1))
-        except:
-            pass
-    return default_idx
+        except ValueError:
+            return default_idx
+    return 0
+    
 
 def _natural_sort_by_index(paths):
+    """
+    Sort so that:
+    - Plain filenames (e.g., 6.jpg) come first.
+    - Then 6 (1).jpg, 6 (2).jpg, etc. in numeric order.
+    - Non-matching names go to the very end.
+    """
     return sorted(paths, key=lambda p: _order_index(p, 10**9))
 
 # ---- Crop Tool Window (drag rectangle over image, then Apply) ----
@@ -396,12 +540,13 @@ class CropTool(tk.Toplevel):
         self.destroy()
 
 class ReviewController:
-    def __init__(self, root, lot_list, grouped_input, grouped_output):
+    def __init__(self, root, lot_list, grouped_input, grouped_output, callback_func):
         self.root = root
         self.lot_list = lot_list
         self.gi = grouped_input
         self.go = grouped_output
         self.idx = 0
+        self.callback_func=callback_func
 
         lot = self.lot_list[self.idx]
         self.win = LotReviewWindow(
@@ -411,6 +556,8 @@ class ReviewController:
             after_paths=self.go.get(lot, []),
             on_prev_lot=self.prev,
             on_next_lot=self.next,
+            callback_func=self.callback_func,
+            lot_list=self.lot_list
         )
 
     def open_idx(self, i):
@@ -423,14 +570,17 @@ class ReviewController:
 
 class LotReviewWindow(tk.Toplevel):
     def __init__(self, master, lot_number, before_paths, after_paths,
-                on_prev_lot, on_next_lot):
+                on_prev_lot, on_next_lot, callback_func, lot_list):
         super().__init__(master)
+        self.master = master
         self.title(f"Lot {lot_number} — Review")
         self.lot_number = str(lot_number)
         self.before_paths = _natural_sort_by_index(before_paths)
         self.after_paths  = _natural_sort_by_index(after_paths)
         self.on_prev_lot = on_prev_lot
         self.on_next_lot = on_next_lot
+        self.callback_func = callback_func
+        self.lot_list=lot_list
 
         self.THUMB_W, self.THUMB_H = 280, 280
         self.COLS = 3
@@ -443,7 +593,7 @@ class LotReviewWindow(tk.Toplevel):
         self.topbar.pack(fill="x", pady=(8, 4))
 
         self.header_label = ttk.Label(self.topbar, text=f"Lot {self.lot_number}", font=("Segoe UI", 12, "bold"))
-        self.header_label.pack(side="left", padx=8)
+        self.header_label.pack(side="left", padx=(20,0))
 
         ttk.Button(self.topbar, text="⟲ Rotate Left",  command=lambda: self._rotate_selected(-90)).pack(side="right", padx=4)
         ttk.Button(self.topbar, text="⟳ Rotate Right", command=lambda: self._rotate_selected(90)).pack(side="right", padx=4)
@@ -454,11 +604,11 @@ class LotReviewWindow(tk.Toplevel):
         mid.pack(fill="both", expand=True, padx=10, pady=6)
 
         self.canvas = tk.Canvas(mid, highlightthickness=0)
-        vscroll = ttk.Scrollbar(mid, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=vscroll.set)
+        self.vscroll = ttk.Scrollbar(mid, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vscroll.set)
 
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll.grid(row=0, column=1, sticky="ns")
+        self.vscroll.grid(row=0, column=1, sticky="ns")
         mid.rowconfigure(0, weight=1)
         mid.columnconfigure(0, weight=1)
 
@@ -472,7 +622,7 @@ class LotReviewWindow(tk.Toplevel):
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         # Mouse wheel scrolling (Windows/macOS/Linux)
-        self._bind_mousewheel(self.canvas)
+        self._bind_mousewheel()
 
         # Inside content: left/right frames + center bar
         self.left_frame  = tk.Frame(self.content)   # BEFORE
@@ -488,7 +638,7 @@ class LotReviewWindow(tk.Toplevel):
         ttk.Label(self.right_frame, text="AFTER (click to select, double-click to crop)", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
 
         # Center actions
-        ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected).pack(pady=6)
+        ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected).pack(pady=(350, 6))
         ttk.Button(self.center_bar, text="↩↩ Revert All",     width=18, command=self._revert_all).pack(pady=6)
         ttk.Separator(self.center_bar, orient="horizontal").pack(fill="x", pady=6)
         ttk.Button(self.center_bar, text="♻ Recrop All",      width=18, command=self._recrop_all).pack(pady=6)
@@ -499,12 +649,50 @@ class LotReviewWindow(tk.Toplevel):
         self._build_group(self.right_frame, self.after_paths,  selectable=True,  is_after=True)
 
         # ==== BOTTOM NAV (fixed) ====
-        bot = tk.Frame(self)
-        bot.pack(fill="x", pady=8)
-        ttk.Button(bot, text="⟵ Prev Lot", command=self.on_prev_lot).pack(side="left", padx=10)
-        ttk.Button(bot, text="Next Lot ⟶", command=self.on_next_lot).pack(side="right", padx=10)
+        self.bot = tk.Frame(self)
+        self.bot.pack(fill="x", pady=8)
+        ttk.Button(self.bot, text="⟵ Prev Lot", command=self.on_prev_lot).pack(side="left", padx=10)
+        ttk.Button(self.bot, text="Next Lot ⟶", command=self.on_next_lot).pack(side="right", padx=10)
+        ttk.Button(self.bot, text="Done Review", command=self._done_review).pack(side="right", padx=4)
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.minsize(1024, 720)
+
+        self.after(0, self._autosize_to_content)
+    
+    def _done_review(self):
+        try:
+            self.destroy()
+        finally:
+            # open Export window (the callback constructs it)
+            if callable(getattr(self, "callback_func", None)):
+                self.callback_func(self.lot_list)
+
+    def _on_close(self):
+        try:
+            if self.canvas and self.canvas.winfo_exists():
+                self.canvas.unbind("<MouseWheel>")
+                self.canvas.unbind("<Button-4>")
+                self.canvas.unbind("<Button-5>")
+        except Exception:
+            pass
+        resp = messagebox.askyesnocancel(
+            "Finish Review",
+            "Would you like to proceed to the Export step?\n\nYes = Open Export\nNo = Exit program\nCancel = Stay here"
+        )
+        if resp is None:
+            return  # cancel, do nothing
+        if resp is True:  # Yes
+            try:
+                self.destroy()
+            finally:
+                if callable(getattr(self, "callback_func", None)):
+                    self.callback_func(self.lot_list)
+        else:  # No
+            try:
+                self.destroy()
+            finally:
+                on_root_close()
 
     def set_lot(self, lot_number, before_paths, after_paths):
         """Swap to a new lot without opening a new window."""
@@ -530,9 +718,51 @@ class LotReviewWindow(tk.Toplevel):
 
         self._build_group(self.left_frame,  self.before_paths, selectable=False, is_after=False)
         self._build_group(self.right_frame, self.after_paths,  selectable=True,  is_after=True)
+        self.after(0, self._autosize_to_content)
 
         # Refresh scroll region
         self._on_content_configure()
+
+    def _autosize_to_content(self):
+        """Resize window to fit content (up to ~92% of screen), then center it."""
+        # Ensure geometry requests are up-to-date
+        self.update_idletasks()
+
+        # Requested sizes of the inner content (both groups), plus fixed bars
+        content_w = self.content.winfo_reqwidth()
+        content_h = self.content.winfo_reqheight()
+        top_h     = self.topbar.winfo_reqheight()
+        bot_h     = self.bot.winfo_reqheight()
+        scroll_w  = self.vscroll.winfo_reqwidth() or 16  # typical scrollbar width
+
+        # Screen limits
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+
+        # Add a little padding
+        pad_w = 30
+        pad_h = 30
+
+        # Desired total window size
+        desired_w = content_w + scroll_w + pad_w
+        desired_h = top_h + content_h + bot_h + pad_h
+
+        # Clamp to screen (leave margins)
+        max_w = int(sw * 0.92)
+        max_h = int(sh * 0.92)
+        win_w = min(desired_w, max_w)
+        win_h = min(desired_h, max_h)
+
+        # Apply sizing
+        self.geometry(f"{win_w}x{win_h}")
+
+        # Center the window (slightly above vertical center)
+        x = (sw - win_w) // 2
+        y = max(0, (sh - win_h) // 3)
+        self.geometry(f"{win_w}x{win_h}+{x}+{y}")
+
+        # If content is shorter than the canvas area, expand canvas height to remove extra blank
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         
     # ----- scroll helpers -----
     def _on_content_configure(self, _evt=None):
@@ -543,23 +773,30 @@ class LotReviewWindow(tk.Toplevel):
         canvas_width = evt.width
         self.canvas.itemconfigure(self.content_id, width=canvas_width)
 
-    def _bind_mousewheel(self, widget):
-        # Windows / Linux
-        widget.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
-        # macOS
-        widget.bind_all("<Button-4>", self._on_mousewheel, add="+")
-        widget.bind_all("<Button-5>", self._on_mousewheel, add="+")
+    def _bind_mousewheel(self):
+        # Windows/Linux wheel
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        # macOS (older Tk on mac uses Button-4/5)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)
+        self.canvas.bind("<Button-5>", self._on_mousewheel)
 
     def _on_mousewheel(self, event):
-        if event.num == 4:      # macOS scroll up
-            self.canvas.yview_scroll(-3, "units")
-        elif event.num == 5:    # macOS scroll down
-            self.canvas.yview_scroll(3, "units")
-        else:                   # Windows/Linux
-            delta = int(-1 * (event.delta / 120))
-            self.canvas.yview_scroll(delta, "units")
+        # If canvas is gone, just ignore
+        if not self.canvas or not self.canvas.winfo_exists():
+            return
+        try:
+            if event.num == 4:        # macOS scroll up
+                self.canvas.yview_scroll(-3, "units")
+            elif event.num == 5:      # macOS scroll down
+                self.canvas.yview_scroll(3, "units")
+            else:                      # Windows/Linux
+                delta = int(-1 * (event.delta / 120))
+                self.canvas.yview_scroll(delta, "units")
+        except tk.TclError:
+            # Widget destroyed between event and call; ignore
+            pass
 
-    # ----- build grids (unchanged logic) -----
+    # ----- build grids-----
     def _build_group(self, frame, paths, selectable, is_after):
         for w in frame.grid_slaves():
             if int(w.grid_info().get("row", 1)) >= 1:
@@ -595,7 +832,7 @@ class LotReviewWindow(tk.Toplevel):
             if is_after:
                 self._after_labels.append((img_label, cap))
 
-    # ----- selection & actions (same as before; keep your implementations) -----
+    # ----- selection & actions -----
     def _select_after(self, idx):
         for j, (lbl, _) in enumerate(self._after_labels):
             lbl.configure(highlightthickness=0)
@@ -715,7 +952,7 @@ class LotReviewWindow(tk.Toplevel):
                 before_p = self.before_paths[i]
             if before_p and os.path.exists(before_p):
                 try:
-                    auto_crop_detected_objects(before_p, after_p)  # <- Your YOLO cropper here
+                    auto_crop_detected_objects(before_p, after_p)
                     count += 1
                 except Exception as e:
                     print("Recrop error:", e)
@@ -754,9 +991,250 @@ def numeric_first_sort(keys):
             return (1, str(k))
     return sorted(keys, key=keyfn)
 
+class ExportWindow(tk.Toplevel):
+    """
+    Lets the user add a uniform description snippet to lots in an export CSV.
+
+    CSV assumptions:
+      - col 0: lot number (string or int-like)
+      - col 1: lot lead       [unchanged]
+      - col 2: lot description  <-- we append here (de-duped)
+      - cols 7+ are image filenames (untouched)
+    """
+    def __init__(self, master, lot_list):
+        super().__init__(master)
+        self.master = master
+        self.title("Export: Add Descriptions")
+        self.minsize(720, 420)
+
+        self.lot_list = set(lot_list)  # lots from your session
+        self.rows = []                 # loaded CSV rows
+        self.header = None
+        self.csv_path = tk.StringVar()
+        self.sep = tk.StringVar(value=" ")   # separator between existing desc and new text
+        self.preview_var = tk.StringVar(value="No CSV loaded.")
+        self.only_session_lots = tk.BooleanVar(value=True)
+
+        # --- Top: choose CSV ---
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(12, 6))
+        ttk.Label(top, text="Export CSV:").pack(side="left")
+        ttk.Entry(top, textvariable=self.csv_path, width=60).pack(side="left", padx=6)
+        ttk.Button(top, text="Browse…", command=self._choose_csv).pack(side="left")
+
+        # --- Middle: text to append ---
+        mid = ttk.Frame(self)
+        mid.pack(fill="both", expand=True, padx=12, pady=6)
+
+        left = ttk.Frame(mid)
+        left.pack(side="left", fill="both", expand=True)
+        ttk.Label(left, text="Text to add to each lot description:").pack(anchor="w")
+        self.txt = tk.Text(left, height=8, wrap="word")
+        self.txt.pack(fill="both", expand=True, pady=(2, 6))
+
+        opts = ttk.Frame(left)
+        opts.pack(fill="x", pady=(4, 0))
+        ttk.Checkbutton(opts, text="Only apply to lots from this session", variable=self.only_session_lots).pack(anchor="w")
+        sep_row = ttk.Frame(opts)
+        sep_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(sep_row, text="Separator between existing and new text:").pack(side="left")
+        ttk.Entry(sep_row, textvariable=self.sep, width=8).pack(side="left", padx=6)
+        ttk.Label(sep_row, text="(e.g., space, newline)").pack(side="left")
+
+        # --- Right: preview / stats ---
+        right = ttk.Frame(mid)
+        right.pack(side="left", fill="y", padx=(12, 0))
+        ttk.Label(right, text="Preview / Status:").pack(anchor="w")
+        self.preview = tk.Listbox(right, height=12, width=36)
+        self.preview.pack(fill="y", expand=False, pady=(2, 6))
+        ttk.Label(right, textvariable=self.preview_var).pack(anchor="w")
+
+        # --- Bottom: actions ---
+        bot = ttk.Frame(self)
+        bot.pack(fill="x", padx=12, pady=(6, 12))
+        ttk.Button(bot, text="Insert default text", command=self._insert_default_text).pack(side="left")
+        ttk.Button(bot, text="Apply and Save As…", command=self._apply_and_save).pack(side="right")
+        ttk.Button(bot, text="Close", command=self._close_and_exit).pack(side="right", padx=6)
+
+        # if the root is hidden, ensure this window is centered and focused
+        self.after(0, self._center_and_focus)
+        self.protocol("WM_DELETE_WINDOW", self._close_and_exit)
+
+    def _insert_default_text(self):
+        dft_txt = (
+            "All lots are sold as is, call for full condition report. In person inspection is recommended.\n\n"
+            "Shipping disclaimer: Items are marked shipping available. This may be done in house or referred to a third party shipper. "
+            "We will contact you after the close of sale if unable to ship in house."
+        )
+
+        current_text = self.txt.get("1.0", "end-1c").strip()
+        # replace current content (or use "end-1c" to append)
+        if dft_txt not in current_text:
+            separator = "\n\n" if current_text else ""
+            self.txt.insert("end-1c", separator + dft_txt)
+        self.txt.focus_set()
+
+    def _interpret_escapes(self, s: str) -> str:
+        # Handle CRLF first, then LF and tab
+        return (
+            s.replace("\\r\\n", "\r\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+        )
+
+    def _center_and_focus(self):
+        self.update_idletasks()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = max(720, self.winfo_width()), max(420, self.winfo_height())
+        x, y = (sw - w) // 2, max(0, (sh - h) // 3)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        try: self.focus_force()
+        except Exception: pass
+
+    def _choose_csv(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Select Export CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        self.csv_path.set(path)
+        self._load_csv(path)
+
+    def _load_csv(self, path):
+        try:
+            with open(path, "r", encoding="cp1252", newline="") as f:
+                rdr = csv.reader(f)
+                rows = list(rdr)
+        except Exception as e:
+            messagebox.showerror("CSV", f"Failed to read CSV:\n{e}")
+            return
+
+        if not rows:
+            messagebox.showerror("CSV", "CSV appears to be empty.")
+            return
+
+        # header optional; if you always have a header, keep it. Otherwise detect.
+        self.header = rows[0] if not rows[0][0].strip().isdigit() else None
+        self.rows = rows[1:] if self.header else rows
+
+        # Populate preview
+        self.preview.delete(0, "end")
+        sample = self.rows[:50]  # show up to 50 lines in preview
+        for r in sample:
+            lot = r[0] if len(r) > 0 else "(missing lot)"
+            lead = r[1] if len(r) > 1 else ""
+            desc = r[2] if len(r) > 2 else ""
+
+            clean_desc = desc[:40].replace('\n', ' ')
+            ellipsis = '…' if len(desc) > 40 else ''
+
+            self.preview.insert(
+                "end",
+                f"Lot {lot} | Lead: {lead} | Desc: {clean_desc}{ellipsis}"
+            )
+        self.preview_var.set(f"Loaded {len(self.rows)} rows.")
+
+    # Normalize description text for de-dupe: collapse spaces, lowercase
+    def _norm(self, s: str) -> str:
+        return " ".join((s or "").split()).lower()
+
+    def _apply_and_save(self):
+        if not self.rows:
+            messagebox.showwarning("Export", "Load a CSV first.")
+            return
+
+        snippet = self.txt.get("1.0", "end").strip()
+        if not snippet:
+            messagebox.showwarning("Export", "Enter some text to add or hit the default text button.")
+            return
+
+        sep_raw = self.sep.get()
+        sep = self._interpret_escapes(sep_raw)
+
+        # Which lots to touch?
+        allowed_lots = None
+        if self.only_session_lots.get():
+            allowed_lots = self.lot_list  # set of strings
+
+        added = 0
+        updated_rows = []
+        for r in self.rows:
+            # Ensure row has at least 3 columns
+            while len(r) < 3:
+                r.append("")
+            lot = str(r[0]).strip()
+            desc_old = r[2] or ""
+            # filter by lot set (if enabled)
+            if allowed_lots is not None and lot not in allowed_lots:
+                updated_rows.append(r)
+                continue
+
+            # de-dupe: if snippet already present (case-insensitive, space-normalized), skip
+            if self._norm(snippet) in self._norm(desc_old):
+                updated_rows.append(r)
+                continue
+
+            # append with separator; keep existing text
+            r[2] = (desc_old + (sep if desc_old and sep else "") + snippet).strip()
+            added += 1
+            updated_rows.append(r)
+
+        # Ask where to save
+        out_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save updated CSV",
+            defaultextension=".csv",
+            initialfile="export_updated.csv",
+            filetypes=[("CSV files", "*.csv")]
+        )
+        if not out_path:
+            return
+
+        try:
+            with open(out_path, "w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                if self.header:
+                    w.writerow(self.header)
+                w.writerows(updated_rows)
+        except Exception as e:
+            messagebox.showerror("Export", f"Failed to save:\n{e}")
+            return
+
+        messagebox.showinfo("Export", f"Updated {added} lot descriptions.\nSaved to:\n{out_path}")
+        self._close_and_exit()
+        
+    def _close_and_exit(self):
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+        on_root_close()  # your idempotent shutdown
+
 
 if __name__ == "__main__":
     root = tk.Tk()
+
+    shutdown_called = False
+    def on_root_close():
+        global shutdown_called
+        if shutdown_called:
+            return
+        shutdown_called = True
+
+        stop_event.set()
+        try: cv2.destroyAllWindows()
+        except Exception: pass
+
+        # quit/destroy on main thread
+        try:
+            root.after(0, lambda: (root.quit(), root.destroy()))
+        except Exception:
+            pass
+
+    root.protocol("WM_DELETE_WINDOW", on_root_close)
     sv_ttk.set_theme("light")
+    stop_event = threading.Event()
     app = CropperGUI(root)
     root.mainloop()
