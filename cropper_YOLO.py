@@ -1,6 +1,7 @@
 from collections import defaultdict
 import threading
 from ultralytics import YOLO
+import torch
 import cv2
 import os, time, shutil, re
 from tqdm import tqdm
@@ -23,8 +24,18 @@ current_idx=0
 
 # Load YOLO model
 try:
-    model = YOLO("E:/Python Projects/auto_cropper/BDAuctions_lot_cropper/yolov8x.pt")
+    # get this directory
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # get the models filepath
+    model_path = os.path.join(base_dir, "yolo11x.pt")
+
+    model = YOLO(model_path)
     print("Model Loaded")
+    if torch.cuda.is_available():
+        model.to('cuda:0')    # or 'cuda'
+    else:
+        print("Model loaded to cpu")
+        model.to('cpu')
 except Exception as e:
     print(f"Failed to load model: {e}")
     messagebox.showinfo(f"Failed to load model: {e}")
@@ -298,7 +309,23 @@ def auto_crop_detected_objects(image_path, output_path):
         print(f"Failed to load {image_path}")
         return
 
-    results = model.predict(image_path, conf=0.0000000000001, imgsz=4800, verbose=False)[0]
+    try:
+        results = model.predict(
+            image_path,
+            device=0,            # or 'cuda'/'cpu'
+            workers=0,           # Windows + GUI thread
+            imgsz=4800,          # your requirement
+            conf=1.5e-3,          # your requirement (over-detect)
+            iou=0.18,            # LOWER than default: prune duplicates hard
+            max_det=200,         # cap postproc work (tune 100–400)
+            agnostic_nms=True,  # class-agnostic → more suppression
+            half=True,          # safer numerics with nightlies
+            amp=False,           # disable autocast (nightly stability)
+            verbose=True
+        )[0]
+    except Exception as e:
+        print("YOLO predict error:", e)
+        restults = None
 
     class_ids = [int(cls.item()) for cls in results.boxes.cls]
     class_names = [model.names[i] for i in class_ids]
@@ -348,6 +375,8 @@ def auto_crop_detected_objects(image_path, output_path):
     cv2.imwrite(output_path, cropped)
     print(f"Cropped and saved: {output_path}")
 
+
+# Groups images in a dict with the parsed lot number as the key and the data being the file path
 def group_images_by_lot(folder):
     pattern = re.compile(r"(\d+)(?:\s*\(\d+\))?\.(jpg|jpeg|png)$", re.IGNORECASE)
     lot_dict = defaultdict(list)
