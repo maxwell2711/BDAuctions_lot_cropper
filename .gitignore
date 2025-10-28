@@ -175,3 +175,10 @@ cython_debug/
 
 # SAM model
 sam_vit_h_4b8939.pth
+
+# YOLO model
+yolov8x.pt
+yolo11x.pt
+
+# All Images
+.jpg

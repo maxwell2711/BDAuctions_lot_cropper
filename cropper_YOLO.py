@@ -301,7 +301,7 @@ def run_cropper(input_dir,output_dir,master,callback_func):
     thread.start()
 
 # Auto cropping function which loads image from the folder, predicts
-# the location of objects and combines all boxes into 
+# the location of objects and combines all boxes into one rectangle
 def auto_crop_detected_objects(image_path, output_path):
     global model
     image = cv2.imread(image_path)
@@ -314,13 +314,13 @@ def auto_crop_detected_objects(image_path, output_path):
             image_path,
             device=0,            # or 'cuda'/'cpu'
             workers=0,           # Windows + GUI thread
-            imgsz=4800,          # your requirement
-            conf=1.5e-3,          # your requirement (over-detect)
+            imgsz=4800,          
+            conf=1.5e-3,          
             iou=0.18,            # LOWER than default: prune duplicates hard
             max_det=200,         # cap postproc work (tune 100–400)
             agnostic_nms=True,  # class-agnostic → more suppression
-            half=True,          # safer numerics with nightlies
-            amp=False,           # disable autocast (nightly stability)
+            half=True,          
+            amp=True,           
             verbose=True
         )[0]
     except Exception as e:
@@ -707,7 +707,7 @@ class LotReviewWindow(tk.Toplevel):
             pass
         resp = messagebox.askyesnocancel(
             "Finish Review",
-            "Would you like to proceed to the Export step?\n\nYes = Open Export\nNo = Exit program\nCancel = Stay here"
+            "Would you like to proceed to the Export step?\n\nNo will exit program\nCancel will stay here"
         )
         if resp is None:
             return  # cancel, do nothing
