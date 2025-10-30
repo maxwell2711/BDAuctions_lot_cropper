@@ -41,6 +41,7 @@ class LotReviewWindow(tk.Toplevel):
     def __init__(self, master, lot_number, before_paths, after_paths,
                  on_prev_lot, on_next_lot, on_export_open, lot_list):
         super().__init__(master)
+        print("LotReviewWindow from:", __file__)
         self.master = master
         self.title(f"Lot {lot_number} — Review")
         self.lot_number = str(lot_number)
@@ -87,9 +88,6 @@ class LotReviewWindow(tk.Toplevel):
         # Resize inner window when content changes width
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Bind Mouse Scrollwheel
-        self._bind_mousewheel()
-
         # Inside Content: Before (left) frame, Button (center) Bar, and After (right) frame
         self.left_frame  = tk.Frame(self.content)
         self.center_bar  = tk.Frame(self.content)
@@ -111,6 +109,8 @@ class LotReviewWindow(tk.Toplevel):
         # Build grids into left/right frames
         self._build_group(self.left_frame,  self.before_paths, selectable=False, is_after=False)
         self._build_group(self.right_frame, self.after_paths,  selectable=True,  is_after=True)
+
+        self._enable_global_scroll()
 
         # Bottom Navigation bar
         self.bot = tk.Frame(self)
@@ -134,13 +134,7 @@ class LotReviewWindow(tk.Toplevel):
                 self.on_export_open(self.lot_list)
 
     def _on_close(self):
-        try:
-            if self.canvas and self.canvas.winfo_exists():
-                self.canvas.unbind("<MouseWheel>")
-                self.canvas.unbind("<Button-4>")
-                self.canvas.unbind("<Button-5>")
-        except Exception:
-            pass
+        self._disable_global_scroll()
         resp = messagebox.askyesnocancel(
             "Finish Review",
             "Would you like to proceed to the Export step?\n\nNo will exit program\nCancel will stay here"
@@ -238,30 +232,46 @@ class LotReviewWindow(tk.Toplevel):
         canvas_width = evt.width
         self.canvas.itemconfigure(self.content_id, width=canvas_width)
 
-    def _bind_mousewheel(self):
-        # Windows/Linux wheel
-        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
-        # macOS (older Tk on mac uses Button-4/5)
-        self.canvas.bind("<Button-4>", self._on_mousewheel)
-        self.canvas.bind("<Button-5>", self._on_mousewheel)
+    # -------- Whole-window mouse wheel routing --------
+    def _enable_global_scroll(self):
+        # bind on this toplevel only
+        self.bind_all("<MouseWheel>", self._on_global_wheel, add="+")   # Windows/macOS (delta)
+        self.bind_all("<Button-4>",  self._on_global_wheel, add="+")   # X11 up
+        self.bind_all("<Button-5>",  self._on_global_wheel, add="+")   # X11 down
 
-    def _on_mousewheel(self, event):
-        # If canvas is gone, just ignore
-        if not self.canvas or not self.canvas.winfo_exists():
-            return
+    def _disable_global_scroll(self):
         try:
-            if event.num == 4:        # macOS scroll up
-                self.canvas.yview_scroll(-3, "units")
-            elif event.num == 5:      # macOS scroll down
-                self.canvas.yview_scroll(3, "units")
-            else:                      # Windows/Linux
-                delta = int(-1 * (event.delta / 120))
-                self.canvas.yview_scroll(delta, "units")
-        except tk.TclError:
-            # Widget destroyed between event and call; ignore
+            self.unbind_all("<MouseWheel>")
+            self.unbind_all("<Button-4>")
+            self.unbind_all("<Button-5>")
+        except Exception:
             pass
 
-    # ----- build grids-----
+    def _on_global_wheel(self, event):
+        # Only act if the event originated inside THIS toplevel
+        if event.widget.winfo_toplevel() is not self:
+            return
+        if not (self.canvas and self.canvas.winfo_exists()):
+            return
+
+        # Adjust speed here (positive value = faster, negative sign determines direction)
+        # Tweak STEPS to slow/speed scrolling.
+        STEPS = 1   # try 1 for slower, 3 for faster
+
+        try:
+            if event.num == 4:        # X11 up
+                self.canvas.yview_scroll(-STEPS, "units")
+            elif event.num == 5:      # X11 down
+                self.canvas.yview_scroll(STEPS, "units")
+            else:
+                # Windows/macOS
+                # event.delta is multiple of 120 on Windows; on mac it can vary
+                direction = -1 if event.delta > 0 else 1
+                self.canvas.yview_scroll(direction * STEPS, "units")
+        except tk.TclError:
+            pass
+
+    # ----- Build Grids-----
     def _build_group(self, frame, paths, selectable, is_after):
         for w in frame.grid_slaves():
             if int(w.grid_info().get("row", 1)) >= 1:
@@ -297,7 +307,7 @@ class LotReviewWindow(tk.Toplevel):
             if is_after:
                 self._after_labels.append((img_label, cap))
 
-    # ----- selection & actions -----
+    # ----- Selection & Actions -----
     def _select_after(self, idx):
         for j, (lbl, _) in enumerate(self._after_labels):
             lbl.configure(highlightthickness=0)
@@ -311,6 +321,7 @@ class LotReviewWindow(tk.Toplevel):
             return False
         return True
 
+    # ---- Actions: rotate / crop / revert / recrop ----
     def _rotate_selected(self, deg):
         if not self._require_selection(): return
         idx = self._selected_idx
@@ -320,7 +331,7 @@ class LotReviewWindow(tk.Toplevel):
             return
         try:
             im = Image.open(path)
-            im = im.rotate(-deg, expand=True)
+            im = im.rotate(-deg, expand=True)  # PIL rotates counter-clockwise; negate for UI intuition
             im.save(path)
             self._refresh_after(idx)
         except Exception as e:
@@ -347,12 +358,14 @@ class LotReviewWindow(tk.Toplevel):
         if not self._require_selection(): return
         idx = self._selected_idx
         after_p = self.after_paths[idx]
+        # find matching before path by order number (best-effort)
         ord_after = _order_index(after_p, idx+1)
         match_before = None
         for p in self.before_paths:
             if _order_index(p, -1) == ord_after:
                 match_before = p
                 break
+        # fallback: same index
         if match_before is None and idx < len(self.before_paths):
             match_before = self.before_paths[idx]
         if match_before and os.path.exists(match_before):
@@ -365,6 +378,7 @@ class LotReviewWindow(tk.Toplevel):
         count = 0
         for i in range(len(self.after_paths)):
             after_p = self.after_paths[i]
+            # match by order num
             ord_after = _order_index(after_p, i+1)
             match_before = None
             for p in self.before_paths:
@@ -420,7 +434,9 @@ class LotReviewWindow(tk.Toplevel):
         self._rebuild_after()
         messagebox.showinfo("Recrop All", f"Recropped {count} images.")
 
+    # ---- Refresh helpers ----
     def _refresh_after(self, idx):
+        # Just redraw the one after tile
         (lbl, cap) = self._after_labels[idx]
         p = self.after_paths[idx]
         if os.path.exists(p):
