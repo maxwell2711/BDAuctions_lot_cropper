@@ -1,180 +1,262 @@
-# io_utils.py
-import os, re, uuid, shutil
+import os
+import re
 from collections import defaultdict
+from typing import Dict, List, Optional, Tuple, Iterable
 
-# Accept both "(k)" and "_k" styles
-# Examples matched:
-#   6.jpg          -> lot=6, idx=None
-#   6(1).png       -> lot=6, idx=1
-#   6  ( 12 ).JPG  -> lot=6, idx=12
-#   6_3.jpeg       -> lot=6, idx=3
-_NAME_RE = re.compile(
-    r"""^
-        (?P<lot>\d+)                      # lot number
-        (?:\s*\(\s*(?P<idx_paren>\d+)\s*\) | _(?P<idx_us>\d+) )?
-        \.(?P<ext>jpg|jpeg|png)$
-    """,
-    re.IGNORECASE | re.VERBOSE
-)
+# -------------------------------
+# Filename parsing & schemes
+# -------------------------------
+# Lots like: 6, 6a, 101B, etc.
+# Schemes supported:
+#   <lot>.ext                   (idx=0, "bare")
+#   <lot> (<n>).ext             (idx=n, "paren")
+#   <lot>_<n>.ext               (idx=n, "under")
+#   <lot>-<n>.ext               (idx=n, "hyphen")
 
-def parse_name(filename):
+_LOT = r"(?P<lot>\d+[A-Za-z]*)"
+_EXT = r"(?P<ext>jpe?g|png)"
+_IDX = r"(?P<idx>\d+)"
+
+_PAREN_IDX = re.compile(rf"^{_LOT}\s*\(({_IDX})\)\.({_EXT})$", re.IGNORECASE)
+_UNDER_IDX = re.compile(rf"^{_LOT}\s*_{_IDX}\.({_EXT})$", re.IGNORECASE)
+_HYPH_IDX  = re.compile(rf"^{_LOT}\s*-{_IDX}\.({_EXT})$", re.IGNORECASE)
+_BARE      = re.compile(rf"^{_LOT}\.({_EXT})$", re.IGNORECASE)
+
+def parse_image_name(path_or_name: str) -> Optional[Tuple[str, int, str, str]]:
     """
-    Returns (lot:str, idx:int|None, ext:str) or (None,None,None) if not matched.
+    Return (lot, idx, scheme, ext) or None if not a supported image.
+    idx=0 for bare; 1.. for indexed.
+    scheme in {"bare","paren","under","hyphen"}.
+    ext includes extension without dot, lowercase (e.g., 'jpg').
     """
-    m = _NAME_RE.match(filename)
-    if not m: return (None, None, None)
-    lot = m.group("lot")
-    idx = m.group("idx_paren") or m.group("idx_us")
-    idx = int(idx) if idx is not None else None
-    ext = m.group("ext")
-    return (lot, idx, ext)
+    name = os.path.basename(path_or_name)
 
-def group_images_by_lot(folder):
-    """Groups files by lot, supports '(k)' and '_k' schemes."""
-    lots = defaultdict(list)
-    for fn in os.listdir(folder):
-        lot, idx, ext = parse_name(fn)
-        if lot is not None:
-            lots[lot].append(os.path.join(folder, fn))
-    return lots
+    m = _PAREN_IDX.match(name)
+    if m:
+        return m.group("lot"), int(m.group("idx")), "paren", m.group(3).lower()
 
-def numeric_first_sort(keys):
-    def keyfn(k):
-        try: return (0, int(k))
-        except ValueError: return (1, str(k))
-    return sorted(keys, key=keyfn)
+    m = _UNDER_IDX.match(name)
+    if m:
+        return m.group("lot"), int(m.group("idx")), "under", m.group(3).lower()
 
-def _basename_for(lot, idx, ext, scheme):
-    if scheme == 'underscore':
-        # idx must be >= 1 in underscore scheme
+    m = _HYPH_IDX.match(name)
+    if m:
+        return m.group("lot"), int(m.group("idx")), "hyphen", m.group(3).lower()
+
+    m = _BARE.match(name)
+    if m:
+        return m.group("lot"), 0, "bare", m.group(2).lower()
+
+    return None
+
+def display_order_for_path(path_or_name: str) -> Optional[int]:
+    """
+    1-based display order: bare and 1 -> 1, 2 -> 2, etc.
+    Returns None if not a supported image.
+    """
+    parsed = parse_image_name(path_or_name)
+    if not parsed:
+        return None
+    _lot, idx, _scheme, _ext = parsed
+    return 1 if idx == 0 else idx
+
+def sort_paths_by_index(paths: Iterable[str]) -> List[str]:
+    """
+    Sort for a single lot: bare(idx=0) first, then 1,2,3...
+    Non-matching filenames go to the end.
+    """
+    def key(p: str):
+        parsed = parse_image_name(p)
+        if parsed:
+            lot, idx, scheme, _ext = parsed
+            return (0, idx)
+        return (1, 10**9, os.path.basename(p).lower())
+    return sorted(paths, key=key)
+
+# -------------------------------
+# Grouping & lot sorting
+# -------------------------------
+
+def group_images_by_lot(folder: str) -> Dict[str, List[str]]:
+    """
+    Returns { lot_id(str): [sorted image paths...] } for all images in a folder.
+    Distinguishes '6' vs '6a' vs '6b', etc.
+    """
+    lot_dict: Dict[str, List[str]] = defaultdict(list)
+    try:
+        for fname in os.listdir(folder):
+            parsed = parse_image_name(fname)
+            if not parsed:
+                continue
+            lot, _idx, _scheme, _ext = parsed
+            lot_dict[lot].append(os.path.join(folder, fname))
+    except FileNotFoundError:
+        pass
+
+    for lot, arr in lot_dict.items():
+        lot_dict[lot] = sort_paths_by_index(arr)
+    return lot_dict
+
+_LOT_SPLIT = re.compile(r"^(\d+)([A-Za-z]*)$")
+
+def _lot_sort_key(lot: str):
+    """
+    Sort lots by (number, suffix), then others lexicographically.
+    E.g. 5 < 5a < 6 < 6a < 10 < 10a < B1 < C
+    """
+    m = _LOT_SPLIT.match(lot)
+    if m:
+        n = int(m.group(1))
+        sfx = m.group(2).lower()
+        return (0, n, sfx)
+    return (1, lot.lower())
+
+def numeric_first_sort(keys: Iterable[str]) -> List[str]:
+    return sorted(keys, key=_lot_sort_key)
+
+# -------------------------------
+# Export rename policy
+# -------------------------------
+
+def _target_name(lot: str, idx: int, scheme: str, ext: str) -> str:
+    if scheme == "paren":
+        return f"{lot} ({idx}).{ext}"
+    if scheme == "under":
         return f"{lot}_{idx}.{ext}"
-    else:
-        # parentheses scheme
-        return f"{lot}({idx}).{ext}"
+    if scheme == "hyphen":
+        return f"{lot}-{idx}.{ext}"
+    raise ValueError("scheme must be paren/under/hyphen")
 
-def plan_renames_for_lot(paths_for_lot):
-    """
-    Compute a renaming plan for one lot that enforces your export rules:
-
-    - Parentheses scheme:
-        * If files are [6, 6(1), 6(2), ...] → export [6(1), 6(2), 6(3), ...]
-          (i.e., base '6' becomes (1), and all existing (k) shift to (k+1)).
-        * If files are [6, 6(2), 6(3), ...] → only rename '6'→'6(1)'.
-        * If only [6(1), 6(2), ...] → leave as-is.
-
-    - Underscore scheme (6_1, 6_2, ...): leave as-is.
-
-    Returns: list of dicts [{src, dst_basename}], in the desired final order.
-    """
-    if not paths_for_lot:
-        return []
-
-    # Parse and bucket
-    by_idx = {}
-    lot = None
-    ext = None
-    base_path = None
-    paren_present = False
-    underscore_present = False
-
-    for p in paths_for_lot:
-        fn = os.path.basename(p)
-        lot2, idx, ext2 = parse_name(fn)
-        if lot2 is None:  # skip unmatched (shouldn't happen due to grouping)
+def _detect_index_scheme(paths: List[str]) -> Optional[str]:
+    """Detect which indexed scheme is in use among given paths."""
+    seen = set()
+    for p in paths:
+        parsed = parse_image_name(p)
+        if not parsed:
             continue
-        lot = lot or lot2
-        ext = ext or ext2
+        _lot, idx, scheme, _ext = parsed
+        if idx > 0:
+            seen.add(scheme)
+    if "paren" in seen:  return "paren"
+    if "under" in seen:  return "under"
+    if "hyphen" in seen: return "hyphen"
+    return None  # no indexed files present
 
-        if idx is None:
-            base_path = p  # the "6.jpg" (no index)
+def compute_export_renames_for_lot(paths: List[str]) -> Dict[str, str]:
+    """
+    Given absolute file paths for ONE lot, compute a plan {src_abs: dst_abs}
+    that enforces:
+      - If bare exists and index 1 exists => shift all indexed n -> n+1, then bare -> 1
+      - If bare exists and index 1 missing => bare -> 1
+      - If only indexed and index 1 missing => promote smallest index to 1
+    Works for paren/under/hyphen. If mixed, prefers paren, else under, else hyphen.
+    """
+    paths = [p for p in paths if parse_image_name(p)]
+    if not paths:
+        return {}
+
+    # All belong to same lot by contract; read lot/ext from any
+    # But ext can differ; we preserve each file's ext individually.
+    # Scheme detection:
+    scheme = _detect_index_scheme(paths) or "paren"
+
+    # Partition by idx
+    by_idx: Dict[int, List[str]] = defaultdict(list)
+    bare = []
+    lot_name = None
+    for p in paths:
+        lot, idx, _scheme, ext = parse_image_name(p)  # type: ignore
+        lot_name = lot if lot_name is None else lot_name
+        if idx == 0:
+            bare.append(p)
         else:
-            by_idx[idx] = p
-            if '(' in fn: paren_present = True
-            if '_' in fn: underscore_present = True
+            by_idx[idx].append(p)
 
-    # If underscore scheme anywhere → leave names as-is
-    if underscore_present and not paren_present:
-        # produce a stable order by idx ascending
-        planned = []
-        for k in sorted(by_idx) or []:
-            planned.append({"src": by_idx[k], "dst_basename": os.path.basename(by_idx[k])})
-        if base_path:
-            # There's a base file but using underscore scheme? Rare.
-            # Export it as lot_1.ext
-            planned = [{"src": base_path, "dst_basename": _basename_for(lot, 1, ext, 'underscore')}] + planned
-        return planned
+    plan: Dict[str, str] = {}
 
-    # Parentheses scheme
-    scheme = 'paren'
-    has_idx1 = (1 in by_idx)
-    # Sort current indexed images
-    ordered_idx = sorted(by_idx.keys())
+    # If more than one bare, keep the lexicographically first as the "bare source"
+    # and treat others as normal files (rare edge case).
+    bare_src = bare[0] if bare else None
 
-    planned = []
+    # Case A: bare exists
+    if bare_src:
+        # If index 1 currently occupied, shift indexes upward (descending to avoid collisions)
+        if 1 in by_idx:
+            # Determine max index present
+            max_idx = max(by_idx.keys()) if by_idx else 1
+            for n in range(max_idx, 0, -1):
+                if n in by_idx:
+                    for p in by_idx[n]:
+                        lot, _i, _s, ext = parse_image_name(p)  # type: ignore
+                        dst_name = _target_name(lot, n + 1, scheme, ext)
+                        plan[p] = os.path.join(os.path.dirname(p), dst_name)
 
-    if base_path and has_idx1:
-        # Case: [6, 6(1), 6(2), ...] → shift every (k) to (k+1); base → (1)
-        planned.append({"src": base_path, "dst_basename": _basename_for(lot, 1, ext, scheme)})
-        for k in ordered_idx:
-            planned.append({
-                "src": by_idx[k],
-                "dst_basename": _basename_for(lot, k + 1, ext, scheme)
-            })
+        # Finally map bare -> 1
+        lot, _i, _s, ext = parse_image_name(bare_src)  # type: ignore
+        dst_name = _target_name(lot, 1, scheme, ext)
+        plan[bare_src] = os.path.join(os.path.dirname(bare_src), dst_name)
+        return plan
 
-    elif base_path and not has_idx1:
-        # Case: [6, 6(2), 6(3), ...] → only 6 → 6(1); others unchanged
-        planned.append({"src": base_path, "dst_basename": _basename_for(lot, 1, ext, scheme)})
-        for k in ordered_idx:
-            planned.append({
-                "src": by_idx[k],
-                "dst_basename": _basename_for(lot, k, ext, scheme)
-            })
+    # Case B: only indexed; ensure index 1 exists
+    if 1 not in by_idx and by_idx:
+        smallest = min(by_idx.keys())
+        # Promote the *first* file at smallest index to index 1
+        p0 = by_idx[smallest][0]
+        lot, _i, _s, ext = parse_image_name(p0)  # type: ignore
+        dst_name = _target_name(lot, 1, scheme, ext)
+        plan[p0] = os.path.join(os.path.dirname(p0), dst_name)
 
-    else:
-        # No base; have [6(1), 6(2)...] or empty → leave as-is
-        for k in ordered_idx:
-            planned.append({
-                "src": by_idx[k],
-                "dst_basename": _basename_for(lot, k, ext, scheme)
-            })
+    return plan
 
-    return planned
-
-def apply_renames_safely(planned, folder):
+def _apply_renames(plan: Dict[str, str]) -> None:
     """
-    Applies the renaming plan with a two-phase strategy to avoid collisions.
-    `planned`: list of {"src": abs_path, "dst_basename": "name.ext"}
+    Safely apply {src_abs: dst_abs} with cycle breaking via temp names.
     """
-    if not planned:
-        return 0
+    if not plan:
+        return
 
-    # Phase 1: move all to temporary unique names
-    temp_paths = []
-    for item in planned:
-        src = item["src"]
-        tmp = os.path.join(folder, f".tmp_ren_{uuid.uuid4().hex}")
-        shutil.move(src, tmp)
-        temp_paths.append((tmp, item["dst_basename"]))
+    folder = None
+    temps = {}
+    used = set()
 
-    # Phase 2: move to final basenames (resolve conflicts by overwriting)
+    # Collect folder & used names
+    for src, dst in plan.items():
+        folder = folder or os.path.dirname(src)
+        used.add(os.path.basename(src))
+        used.add(os.path.basename(dst))
+
+    def _temp_for(dst_path: str) -> str:
+        base = os.path.basename(dst_path)
+        stem, ext = os.path.splitext(base)
+        k = 0
+        while True:
+            tmp = f"{stem}.__tmp__{k}{ext}"
+            if tmp not in used:
+                used.add(tmp)
+                return os.path.join(folder, tmp)  # type: ignore
+            k += 1
+
+    # Phase 1: move to temps
+    for src, dst in plan.items():
+        if os.path.exists(src):
+            tmp = _temp_for(dst)
+            os.replace(src, tmp)
+            temps[tmp] = dst
+
+    # Phase 2: temps -> final
+    for tmp, dst in temps.items():
+        os.replace(tmp, dst)
+
+def normalize_output_dir(out_dir: str) -> int:
+    """
+    For every lot in out_dir, enforce the export filename policy on disk.
+    Returns number of files renamed.
+    """
     count = 0
-    for tmp, dst_base in temp_paths:
-        final = os.path.join(folder, dst_base)
-        # If a file with the same name exists (e.g., duplicates), replace it.
-        if os.path.exists(final):
-            os.remove(final)
-        shutil.move(tmp, final)
-        count += 1
+    groups = group_images_by_lot(out_dir)
+    for _lot, files in groups.items():
+        plan = compute_export_renames_for_lot(files)
+        if plan:
+            _apply_renames(plan)
+            count += len(plan)
     return count
-
-def normalize_output_dir(out_dir):
-    """
-    Normalizes every lot folder in-place per the export rules.
-    Returns total files renamed.
-    """
-    lots = group_images_by_lot(out_dir)
-    total = 0
-    for lot, paths in lots.items():
-        plan = plan_renames_for_lot(paths)
-        total += apply_renames_safely(plan, out_dir)
-    return total

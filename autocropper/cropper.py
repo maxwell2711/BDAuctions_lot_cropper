@@ -21,9 +21,9 @@ def auto_crop_detected_objects(image_path, output_path):
             device=0,          # or 'cuda'/'cpu'
             workers=0,         # safer with tkinter on Windows
             imgsz=4800,
-            conf=1.5e-3,
-            iou=0.18,
-            max_det=200,
+            conf=2e-3,
+            iou=0.3,
+            max_det=300,
             agnostic_nms=True,
             half=True,
             amp=False,
