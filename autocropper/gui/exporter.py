@@ -4,6 +4,7 @@ import csv
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from ..io_utils import parse_image_name, group_images_by_lot, compute_export_renames_for_lot, normalize_output_dir
+from ..runtime import on_root_close
 
 # ---- CSV column map (0-based) ----
 LOT_COL              = 0  # col 1
@@ -90,10 +91,10 @@ class ExportWindow(tk.Toplevel):
         bot.pack(fill="x", padx=12, pady=(6, 12))
         ttk.Button(bot, text="Insert default text", command=self._insert_default_text).pack(side="left")
         ttk.Button(bot, text="Apply and Save As…", command=self._apply_and_save).pack(side="right")
-        ttk.Button(bot, text="Close", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(bot, text="Close", command=self._on_close).pack(side="right", padx=6)
 
         self.after(0, self._center_and_focus)
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _insert_default_text(self):
         dft_txt = (
@@ -106,6 +107,11 @@ class ExportWindow(tk.Toplevel):
             sep = "\n\n" if current else ""
             self.txt.insert("end-1c", sep + dft_txt)
         self.txt.focus_set()
+
+    def _on_close(self):
+        try: self.destroy()
+        finally:
+            on_root_close(self.master)
 
     def _interpret_escapes(self, s: str) -> str:
         return (
@@ -307,4 +313,6 @@ class ExportWindow(tk.Toplevel):
             "Export",
             f"Updated descriptions for {total_desc_updates} row(s).\nSaved to:\n{out_path}"
         )
-        self.destroy()
+        try: self.destroy()
+        finally:
+            on_root_close(self.master)

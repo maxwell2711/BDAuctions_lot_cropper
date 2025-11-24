@@ -50,6 +50,12 @@ class CropTool(tk.Toplevel):
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_up)
 
+        # Make Enter apply and close, Escape cancels
+        self.bind("<Return>", lambda e: self._apply_crop())
+        self.bind("<KP_Enter>", lambda e: self._apply_crop())  # numpad Enter
+        self.bind("<Escape>",  lambda e: self.destroy())
+        self.focus_force()
+
         self._photo = None
         self._draw_image()
 
@@ -133,7 +139,7 @@ class CropTool(tk.Toplevel):
             stipple="gray50"
         )
         
-    def _apply_crop(self):
+    def _apply_crop(self, e = None):
         if not (self._start and self._end):
             messagebox.showwarning("Crop", "Draw a rectangle first.")
             return
