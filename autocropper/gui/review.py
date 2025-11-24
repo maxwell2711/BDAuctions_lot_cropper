@@ -2,7 +2,7 @@ import os, shutil, tkinter as tk
 import gc
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
-from ..io_utils import sort_paths_by_index, display_order_for_path  # new helpers
+from ..io_utils import sort_paths_by_index, display_order_for_path, parse_image_name, _target_name, _apply_renames
 from ..cropper import auto_crop_detected_objects
 from .crop_tool import CropTool
 from ..runtime import on_root_close
@@ -54,13 +54,23 @@ class LotReviewWindow(tk.Toplevel):
         self.COLS = 3
         self._selected_idx = None
         self._after_labels = []
-        self._photo_refs = []
 
         # Top Toolbar
         self.topbar = ttk.Frame(self)
         self.topbar.pack(fill="x", pady=(8, 4))
         self.header_label = ttk.Label(self.topbar, text=f"Lot {self.lot_number}", font=("Segoe UI", 12, "bold"))
         self.header_label.pack(side="left", padx=(20,0))
+        # --- Jump to lot controls (top-left) ---
+        jump_box = ttk.Frame(self.topbar)
+        jump_box.pack(side="left", padx=(12, 0))
+
+        ttk.Label(jump_box, text="Jump to lot:").pack(side="left", padx=(6, 4))
+        self._jump_var = tk.StringVar()
+        ent = ttk.Entry(jump_box, textvariable=self._jump_var, width=10)
+        ent.pack(side="left")
+        ent.bind("<Return>", lambda e: self._jump_to_lot())
+
+        ttk.Button(jump_box, text="Go", command=self._jump_to_lot).pack(side="left", padx=(4, 0))
         ttk.Button(self.topbar, text="⟲ Rotate Left",  command=lambda: self._rotate_selected(-90)).pack(side="right", padx=4)
         ttk.Button(self.topbar, text="⟳ Rotate Right", command=lambda: self._rotate_selected(90)).pack(side="right", padx=4)
         ttk.Button(self.topbar, text="✂ Crop",         command=self._crop_selected).pack(side="right", padx=4)
@@ -107,13 +117,51 @@ class LotReviewWindow(tk.Toplevel):
         # Bottom nav
         self.bot = tk.Frame(self)
         self.bot.pack(fill="x", pady=8)
-        ttk.Button(self.bot, text="⟵ Prev Lot", command=self.on_prev_lot).pack(side="left", padx=10)
         ttk.Button(self.bot, text="Next Lot ⟶", command=self.on_next_lot).pack(side="right", padx=10)
+        ttk.Button(self.bot, text="⟵ Prev Lot", command=self.on_prev_lot).pack(side="right", padx=4)
         ttk.Button(self.bot, text="Done Review", command=self._done_review).pack(side="right", padx=4)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.minsize(1024, 720)
         self.after(0, self._autosize_to_content)
+
+        # Hotkey bindings
+        self.bind("<Left>",  lambda e: self._rotate_selected(-90))
+        self.bind("<KP_Left>",  lambda e: self._rotate_selected(-90))
+        self.bind("<KP_4>",  lambda e: self._rotate_selected(-90))
+        self.bind("4",  lambda e: self._rotate_selected(-90))
+        self.bind("<Right>", lambda e: self._rotate_selected(90))
+        self.bind("<KP_Right>", lambda e: self._rotate_selected(90))
+        self.bind("<KP_6>", lambda e: self._rotate_selected(90))
+        self.bind("6", lambda e: self._rotate_selected(90))
+        self.bind("<Up>", lambda e: self._selected_image_index(1))
+        self.bind("<KP_Up>", lambda e: self._selected_image_index(1))
+        self.bind("<KP_8>", lambda e: self._selected_image_index(1))
+        self.bind("8", lambda e: self._selected_image_index(1))
+        self.bind("<Down>", lambda e: self._selected_image_index(-1))
+        self.bind("<KP_Down>", lambda e: self._selected_image_index(-1))
+        self.bind("<KP_2>", lambda e: self._selected_image_index(-1))
+        self.bind("2", lambda e: self._selected_image_index(-1))
+        self.bind("<R>", lambda e: self._revert_selected())
+        self.bind("<r>", lambda e: self._revert_selected())
+        self.bind("<KP_3>", lambda e: self._revert_selected())
+        self.bind("3", lambda e: self._revert_selected())
+        self.bind("<KP_Next>", lambda e: self._revert_selected())
+        self.bind("<N>", lambda e: self.on_next_lot())
+        self.bind("<n>", lambda e: self.on_next_lot())
+        self.bind("<KP_Prior>", lambda e: self.on_next_lot())
+        self.bind("<KP_9>", lambda e: self.on_next_lot())
+        self.bind("9", lambda e: self.on_next_lot())
+        self.bind("<P>", lambda e: self.on_prev_lot())
+        self.bind("<p>", lambda e: self.on_prev_lot())
+        self.bind("<KP_Home>", lambda e: self.on_prev_lot())
+        self.bind("<KP_7>", lambda e: self.on_prev_lot())
+        self.bind("7", lambda e: self.on_prev_lot())
+        self.bind("<C>", lambda e: self._crop_selected())
+        self.bind("<c>", lambda e: self._crop_selected())
+        self.bind("<KP_5>", lambda e: self._crop_selected())
+        self.bind("5", lambda e: self._crop_selected())
+        self.focus_force()
 
     def _done_review(self):
         try:
@@ -122,10 +170,40 @@ class LotReviewWindow(tk.Toplevel):
             if callable(self.on_export_open):
                 self.on_export_open(self.lot_list)
 
+    def _rotate_index(self, idx: int, deg: int):
+        # select, then rotate; keeps UI consistent with highlight
+        self._select_after(idx)
+        self._rotate_selected(deg)
+
+    def _jump_to_lot(self):
+        target = (self._jump_var.get() or "").strip()
+        if not target:
+            return
+        # Exact match on lot id as keyed in lot_list (supports '6', '6a', etc.)
+        try:
+            idx = self.lot_list.index(target)
+        except ValueError:
+            # fallback: case-insensitive match
+            lowered = [s.lower() for s in self.lot_list]
+            try:
+                idx = lowered.index(target.lower())
+            except ValueError:
+                messagebox.showinfo("Jump", f"Lot '{target}' not found.")
+                return
+        # swap to that lot
+        self.master.after(0, lambda: self.master.focus_force())  # keep app focused
+        self._jump_var.set("")  # clear box
+        # Ask controller to open it if available, else set here (works if controller unavailable)
+        try:
+            # common path: window was created by ReviewController
+            # find our controller via a bound method on prev/next (optional)
+            self.on_prev_lot.__self__.open_idx(idx)  # type: ignore[attr-defined]
+        except Exception:
+            # fallback: do it locally if we can't reach controller
+            lot = self.lot_list[idx]
+            self.set_lot(lot, self.gi.get(lot, []), self.go.get(lot, []))  # needs gi/go if stored
+
     def _on_close(self):
-        self._disable_global_scroll()
-        self._clear_image_refs(self.left_frame)
-        self._clear_image_refs(self.right_frame)
         resp = messagebox.askyesnocancel(
             "Finish Review",
             "Would you like to proceed to the Export step?\n\nNo will exit program\nCancel will stay here"
@@ -133,11 +211,17 @@ class LotReviewWindow(tk.Toplevel):
         if resp is None:
             return
         if resp is True:
+            self._disable_global_scroll()
+            self._clear_image_refs(self.left_frame)
+            self._clear_image_refs(self.right_frame)
             try: self.destroy()
             finally:
                 if callable(self.on_export_open):
                     self.on_export_open(self.lot_list)
         else:
+            self._disable_global_scroll()
+            self._clear_image_refs(self.left_frame)
+            self._clear_image_refs(self.right_frame)
             try: self.destroy()
             finally:
                 on_root_close(self.master)
@@ -255,13 +339,120 @@ class LotReviewWindow(tk.Toplevel):
 
             img_label.grid(row=row, column=col, padx=6, pady=6)
 
-            disp = display_order_for_path(p) or (i + 1)
-            cap = tk.Label(frame, text=f"#{disp}")
-            cap.grid(row=row+1, column=col, pady=(0, 10))
+            order_num = display_order_for_path(p) or (i + 1)
+            controls = tk.Frame(frame)
+            controls.grid(row=row+1, column=col, pady=(0, 10))
+
+            # left rotate
+            btn_l = ttk.Button(controls, text="⟲", width=1.5,
+                            command=lambda k=i: self._rotate_index(k, -90))
+            btn_l.pack(side="left", padx=(0,10))
+
+            # index image up
+            btn_up = ttk.Button(controls, text="↑", width=1.5,
+                                command=lambda k=i: self._image_index(k, 1))
+            btn_up.pack(side="left", padx=4)
+
+            # caption in the middle
+            cap = tk.Label(controls, text=f"#{order_num}")
+            cap.pack(side= "left", padx = (5,5))
+
+            # index image down
+            btn_up = ttk.Button(controls, text="↓", width=1.5,
+                                command=lambda k=i: self._image_index(k, -1))
+            btn_up.pack(side="left", padx=4)
+
+            # right rotate
+            btn_r = ttk.Button(controls, text="⟳", width=1.5,
+                            command=lambda k=i: self._rotate_index(k, 90))
+            btn_r.pack(side="left", padx=(10,0))
 
             if is_after:
                 self._after_labels.append((img_label, cap))
 
+    def _selected_image_index(self, direction: int):
+        if not self._require_selection(): return
+        self._image_index(self._selected_idx, direction)
+        return
+
+    def _image_index(self, idx: int, direction: int):
+        """
+        Move AFTER image at idx up/down by one position and
+        renumber files on disk to 1..N according to scheme.
+        direction: 1 = up (toward index 0), -1 = down.
+        """
+        if not (0 <= idx < len(self.after_paths)):
+            return
+
+        if direction == 1:  # move up
+            if idx == 0:
+                return  # already at top
+            new_idx = idx - 1
+        elif direction == -1:  # move down
+            if idx == len(self.after_paths) - 1:
+                return  # already at bottom
+            new_idx = idx + 1
+        else:
+            return  # unknown direction, ignore
+
+        # Reorder in-memory list
+        self.after_paths[idx], self.after_paths[new_idx] = (
+            self.after_paths[new_idx],
+            self.after_paths[idx],
+        )
+
+        # Renumber file names on disk to match new order
+        self._resequence_after_files()
+
+        # Rebuild UI & keep selection on moved image
+        self._build_group(self.right_frame, self.after_paths, selectable=True, is_after=True)
+        self._select_after(new_idx)
+
+    def _resequence_after_files(self):
+        """
+        Given current self.after_paths order (for a single lot),
+        rename files on disk so that they become:
+
+            lot(1).ext, lot(2).ext, ...         [paren]
+            lot_1.ext, lot_2.ext, ...           [under]
+            lot-1.ext, lot-2.ext, ...           [hyphen]
+
+        according to whichever scheme that lot already uses.
+        """
+        plan = {}        # {src_abs: dst_abs}
+        new_paths = []   # what after_paths *will* be after renames
+
+        for new_idx, old_path in enumerate(self.after_paths, start=1):
+            parsed = parse_image_name(old_path)
+            if not parsed:
+                # Non-matching: leave as-is
+                new_paths.append(old_path)
+                continue
+
+            lot, _old_idx, scheme, ext = parsed
+
+            # If somehow a 'bare' sneaks in, treat it as paren indexed
+            if scheme == "bare":
+                scheme = "paren"
+
+            dst_name = _target_name(lot, new_idx, scheme, ext)
+            dst_path = os.path.join(os.path.dirname(old_path), dst_name)
+            new_paths.append(dst_path)
+
+            if dst_path != old_path:
+                plan[old_path] = dst_path
+
+        if not plan:
+            # Nothing to rename; just update paths
+            self.after_paths = sort_paths_by_index(new_paths)
+            return
+
+        # Apply via shared safe renamer (handles cycles with temp files)
+        _apply_renames(plan)
+
+        # Update our in-memory paths to final names, and keep them sorted by index
+        self.after_paths = sort_paths_by_index(new_paths)
+    
     def _select_after(self, idx):
         for j, (lbl, _) in enumerate(self._after_labels):
             lbl.configure(highlightthickness=0)
@@ -410,6 +601,7 @@ class LotReviewWindow(tk.Toplevel):
             if hasattr(w, "image"):
                 w.image = None
         gc.collect()
+
     def _rebuild_after(self):
         self._build_group(self.right_frame, self.after_paths, selectable=True, is_after=True)
 
