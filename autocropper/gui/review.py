@@ -52,6 +52,7 @@ class LotReviewWindow(tk.Toplevel):
 
         self.THUMB_W, self.THUMB_H = 280, 280
         self.COLS = 3
+        self._resize_job = None
         self._selected_idx = None
         self._after_labels = []
 
@@ -89,8 +90,10 @@ class LotReviewWindow(tk.Toplevel):
         self.content = ttk.Frame(self.canvas)
         self.content_id = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
 
-        self.content.bind("<Configure>", self._on_content_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.content.bind("<Configure>", self._on_content_configure)
+        
+
 
         # Inside Content: Left (before), Center (actions), Right (after)
         self.left_frame  = tk.Frame(self.content)
@@ -254,28 +257,111 @@ class LotReviewWindow(tk.Toplevel):
 
     def _autosize_to_content(self):
         self.update_idletasks()
+
         content_w = self.content.winfo_reqwidth()
         content_h = self.content.winfo_reqheight()
         top_h     = self.topbar.winfo_reqheight()
         bot_h     = self.bot.winfo_reqheight()
         scroll_w  = self.vscroll.winfo_reqwidth() or 16
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        pad_w = 30; pad_h = 30
+
+        pad_w = 30
+        pad_h = 30
+
         desired_w = content_w + scroll_w + pad_w
         desired_h = top_h + content_h + bot_h + pad_h
-        max_w = int(sw * 0.92); max_h = int(sh * 0.92)
-        win_w = min(desired_w, max_w); win_h = min(desired_h, max_h)
-        self.geometry(f"{win_w}x{win_h}")
-        x = (sw - win_w) // 2; y = max(0, (sh - win_h) // 3)
+
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        
+        # Allow up to 90% of screen, but prefer reasonable defaults
+        max_w = int(sw * 0.90)
+        max_h = int(sh * 0.90)
+        
+        # Start with a reasonable default, not cramped
+        win_w = min(desired_w, max_w, 1400)  # cap at 1400px initially
+        win_h = min(desired_h, max_h, 900)   # cap at 900px initially
+        
+        # Ensure minimum viable size
+        win_w = max(win_w, 1024)
+        win_h = max(win_h, 720)
+
+        x = (sw - win_w) // 2
+        y = max(0, (sh - win_h) // 3)
         self.geometry(f"{win_w}x{win_h}+{x}+{y}")
+
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _rebuild_all(self):
+        """
+        Rebuild BEFORE and AFTER grids using current THUMB_W/THUMB_H and 3 columns.
+        """
+        self._clear_image_refs(self.left_frame)
+        self._clear_image_refs(self.right_frame)
+
+        for w in self.left_frame.grid_slaves():
+            w.destroy()
+        for w in self.right_frame.grid_slaves():
+            w.destroy()
+
+        ttk.Label(
+            self.left_frame,
+            text="BEFORE",
+            font=("Segoe UI", 11, "bold")
+        ).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
+
+        ttk.Label(
+            self.right_frame,
+            text="AFTER (click to select, double-click to crop)",
+            font=("Segoe UI", 11, "bold")
+        ).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
+
+        self._build_group(self.left_frame,  self.before_paths, selectable=False, is_after=False)
+        self._build_group(self.right_frame, self.after_paths, selectable=True, is_after=True)
+
+        self._on_content_configure()
 
     def _on_content_configure(self, _evt=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _on_canvas_configure(self, evt):
-        self.canvas.itemconfigure(self.content_id, width=evt.width)
+        canvas_width = evt.width
+        self.canvas.itemconfigure(self.content_id, width=canvas_width)
+
+        # The content has 3 columns: left_frame | center_bar | right_frame
+        # Each frame should get roughly equal width
+        # But center_bar is narrow, so allocate most space to left + right
+        
+        CENTER_BAR_WIDTH = 200  # fixed width for center buttons
+        FRAME_PADDING = 10      # padding between frames (padx=5 each side)
+        
+        # Available width for left + right frames
+        available_w = canvas_width - CENTER_BAR_WIDTH - FRAME_PADDING
+        
+        # Each side frame gets half
+        side_frame_width = available_w // 2
+        
+        # Now divide each side frame into 3 columns of thumbnails
+        per_col_padding = 20  # padding around each thumbnail
+        total_padding = per_col_padding * self.COLS
+        
+        if side_frame_width <= total_padding:
+            new_thumb_w = 80  # absolute minimum
+        else:
+            new_thumb_w = (side_frame_width - total_padding) // self.COLS
+            new_thumb_w = min(280, max(100, new_thumb_w))  # clamp between 100-280
+        
+        new_thumb_h = new_thumb_w  # square thumbnails
+        
+        # Skip rebuild if nothing changed
+        if new_thumb_w == self.THUMB_W and new_thumb_h == self.THUMB_H:
+            return
+
+        self.THUMB_W, self.THUMB_H = new_thumb_w, new_thumb_h
+
+        # Debounce rebuild
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(120, self._rebuild_all)
 
     def _enable_global_scroll(self):
         self.bind_all("<MouseWheel>", self._on_global_wheel, add="+")
