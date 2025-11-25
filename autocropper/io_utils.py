@@ -1,7 +1,8 @@
+import csv
 import os
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Iterable
+from typing import Dict, List, Optional, Tuple, Iterable, Set
 
 # -------------------------------
 # Filename parsing & schemes
@@ -260,3 +261,35 @@ def normalize_output_dir(out_dir: str) -> int:
             _apply_renames(plan)
             count += len(plan)
     return count
+
+
+def compute_already_cropped_lots(input_dir: str, output_dir: str) -> Set[str]:
+    """
+    Compare input and output directories to find lots that are already complete.
+    
+    Logic:
+      - For each lot that appears in both input_dir and output_dir:
+          input_count = number of image files for that lot in input_dir
+          output_count = number of image files for that lot in output_dir
+        
+        If output_count >= input_count:
+            -> that lot is already done (all originals have been cropped)
+        Else:
+            -> that lot is NOT done (new images were added or still processing)
+    
+    Returns a set of lot IDs that can be skipped.
+    """
+    input_groups = group_images_by_lot(input_dir)
+    output_groups = group_images_by_lot(output_dir)
+    
+    done: Set[str] = set()
+    
+    for lot, input_files in input_groups.items():
+        input_count = len(input_files)
+        output_count = len(output_groups.get(lot, []))
+        
+        # If output has as many or more files than input, lot is done
+        if output_count >= input_count:
+            done.add(lot)
+    
+    return done

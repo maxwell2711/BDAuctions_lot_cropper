@@ -1,4 +1,16 @@
-# BDAuctions_lot_cropper
+# Keybindings for Review Window
+Numpad 8/Numpad Up/Up Arrow         | Move image up one index
+Numpad 2/Numpad Down/Down Arrow     | Move image down one index
+Numpad 4/Numpad Left/Left Arrow     | Rotate image 90deg clockwise
+Numpad 6/Numpad Right/Right Arrow   | Rotate image 90deg counterclockwise
+Numpad 3/Numpad Page Down/R Key     | Revert selected image
+Numpad 5/C Key                      | Open crop tool for selected image
+Numpad 7/Numpad Home/P Key          | Move to previous lot
+Numpad 9/Numpad Page Up/N Key       | Move to next lot
+
+*Note that pressing escape leaves the crop tool window without saving & pressing enter will crop and save the image corresponding to the area you have marked in the canvas.
+
+# Legacy BDAuctions_lot_cropper
 This repository contains a python program which automatically crops images and adds descriptions for the BD Auctions HiBid sales.
 
 

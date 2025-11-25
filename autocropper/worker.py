@@ -1,8 +1,35 @@
+"""
+Execute the image cropping process on a separate worker thread with GUI progress tracking.
+Processes all image files in the input directory, optionally filtering out specified lots,
+and applies automatic object detection-based cropping to each image. Progress is displayed
+in a separate window while the operation runs on a background thread to keep the GUI responsive.
+Args:
+    input_dir (str): Path to the directory containing input images (.jpg, .jpeg, .png).
+    output_dir (str): Path to the directory where cropped images will be saved.
+    master (tk.Tk or tk.Toplevel): The root/parent Tkinter window for progress display.
+    on_done (callable): Callback function to execute when cropping completes successfully.
+    skip_lots (list, optional): List of lot identifiers to exclude from processing. 
+                            Defaults to None (process all lots).
+Returns:
+    None
+Side Effects:
+    - Creates a ProgressWindow displaying cropping progress
+    - Spawns a daemon thread that processes images and calls auto_crop_detected_objects()
+    - Updates global progress object during execution
+    - Calls on_done callback upon successful completion
+    - Hides the master window during processing and restores it if user cancels
+Notes:
+    - Uses stop_event to support user cancellation of the operation
+    - Images are filtered based on parse_image_name() result if skip_lots is provided
+    - Progress updates occur before each image is cropped
+    - Gracefully handles window closure during processing
+"""
 import os, threading, time
 import tkinter as tk
 from tkinter import ttk
 from .runtime import progress, stop_event, on_root_close
 from .cropper import auto_crop_detected_objects
+from .io_utils import parse_image_name
 
 class ProgressWindow(tk.Toplevel):
     # Initialize and format the window
@@ -75,12 +102,25 @@ class ProgressWindow(tk.Toplevel):
             except tk.TclError:
                 pass
 
-def run_cropper(input_dir, output_dir, master, on_done):
-    # Mark input and output folders
-    #input_dir = "E:/Python Projects/auto_cropper/BDAuctions_lot_cropper/test_input"
-    #output_dir = "E:/Python Projects/auto_cropper/BDAuctions_lot_cropper/test_output"
-    #os.makedirs(output_dir, exist_ok=True)
-    image_files = [f for f in os.listdir(input_dir) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
+def run_cropper(input_dir, output_dir, master, on_done, skip_lots=None):
+    # find all images in input_dir
+    all_files = [
+        f for f in os.listdir(input_dir)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ]
+
+    if skip_lots:
+        filtered = []
+        for fname in all_files:
+            parsed = parse_image_name(fname)
+            if not parsed:
+                continue
+            lot, idx, scheme, ext = parsed
+            if lot not in skip_lots:
+                filtered.append(fname)
+        image_files = filtered
+    else:
+        image_files = all_files
 
     progress.current = 0
     progress.total = len(image_files)

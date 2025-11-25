@@ -83,7 +83,7 @@ class ExportWindow(tk.Toplevel):
         right = ttk.Frame(mid)
         right.pack(side="left", fill="y", padx=(12, 0))
         ttk.Label(right, text="Preview / Status:").pack(anchor="w")
-        self.preview = tk.Listbox(right, height=12, width=36)
+        self.preview = tk.Listbox(right, height=15, width=65)
         self.preview.pack(fill="y", expand=False, pady=(2, 6))
         ttk.Label(right, textvariable=self.preview_var).pack(anchor="w")
 

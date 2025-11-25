@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from ..io_utils import group_images_by_lot, numeric_first_sort, normalize_output_dir
+from ..io_utils import group_images_by_lot, numeric_first_sort, normalize_output_dir, compute_already_cropped_lots
 from ..worker import run_cropper
 from .review import ReviewController
 from .exporter import ExportWindow
@@ -10,10 +10,13 @@ class CropperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Auto Cropper")
-        self.root.geometry("500x160")
+        self.root.geometry("540x240")
 
         self.input_dir = tk.StringVar()
         self.output_dir = tk.StringVar()
+        self.prev_csv_path = tk.StringVar()
+        self.use_prev_csv = tk.BooleanVar(value=False)
+        self.already_done_lots = None  # to store lots skipped from previous CSV
 
         root.columnconfigure(1, weight=1)
 
@@ -54,15 +57,35 @@ class CropperGUI:
             messagebox.showerror("Invalid Input", "Please select valid folders.")
             return
 
+        # Compute lots to skip based on input/output comparison
+        skip_lots = compute_already_cropped_lots(in_dir, out_dir)
+        if skip_lots:
+            print(f"[resume] skipping lots: {sorted(skip_lots)}")
+
         def after_crop():
+            # normalize output dir filenames
             renamed = normalize_output_dir(out_dir)
             print(f"[normalize] renamed {renamed} files")
+
             gi, go, lot_list = self._compute_lots(in_dir, out_dir)
+
+            # For review, only show non-skipped lots
+            if skip_lots:
+                lot_list = [lot for lot in lot_list if lot not in skip_lots]
+
+            if not lot_list:
+                messagebox.showinfo("SUCCESS!", "All lots have already been cropped.")
+                self.root.deiconify()
+                return
+
             ReviewController(self.root, lot_list, gi, go, self.begin_Export)
-            messagebox.showinfo("SUCCESS! Processing Complete", f"Cropped images saved to:\n{out_dir}")
+            messagebox.showinfo(
+                "SUCCESS! Processing Complete",
+                f"Cropped images saved to:\n{out_dir}"
+            )
 
         self.root.withdraw()
-        run_cropper(in_dir, out_dir, self.root, after_crop)
+        run_cropper(in_dir, out_dir, self.root, after_crop, skip_lots=skip_lots)
 
     def begin_Export(self, lot_list):
         out_dir = self.output_dir.get()
@@ -86,8 +109,22 @@ class CropperGUI:
         if not os.path.isdir(in_dir) or not os.path.isdir(out_dir):
             messagebox.showerror("Invalid Input", "Please select valid folders.")
             return
+
         renamed = normalize_output_dir(out_dir)
         print(f"[normalize] renamed {renamed} files")
+
         gi, go, lot_list = self._compute_lots(in_dir, out_dir)
+
+        # Compute lots to skip based on input/output comparison
+        skip_lots = compute_already_cropped_lots(in_dir, out_dir)
+        if skip_lots:
+            lot_list = [lot for lot in lot_list if lot not in skip_lots]
+            print(f"[resume] skipping lots: {sorted(skip_lots)}")
+
+        # Check if lot_list is empty after filtering
+        if not lot_list:
+            messagebox.showinfo("Review", "All lots have already been cropped.")
+            return
+
         self.root.withdraw()
         ReviewController(self.root, lot_list, gi, go, self.begin_Export)
