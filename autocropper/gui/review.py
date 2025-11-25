@@ -2,10 +2,10 @@ import os, shutil, tkinter as tk
 import gc
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
-from ..io_utils import sort_paths_by_index, display_order_for_path, parse_image_name, _target_name, _apply_renames
-from ..cropper import auto_crop_detected_objects
-from .crop_tool import CropTool
-from ..runtime import on_root_close
+from autocropper.io_utils import sort_paths_by_index, display_order_for_path, parse_image_name, _target_name, _apply_renames
+from autocropper.cropper import auto_crop_detected_objects
+from autocropper.gui.crop_tool import CropTool
+from autocropper.runtime import on_root_close
 
 class ReviewController:
     def __init__(self, root, lot_list, grouped_input, grouped_output, on_export_open):

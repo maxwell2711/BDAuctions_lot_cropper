@@ -27,9 +27,9 @@ Notes:
 import os, threading, time
 import tkinter as tk
 from tkinter import ttk
-from .runtime import progress, stop_event, on_root_close
-from .cropper import auto_crop_detected_objects
-from .io_utils import parse_image_name
+from autocropper.runtime import progress, stop_event, on_root_close
+from autocropper.cropper import auto_crop_detected_objects
+from autocropper.io_utils import parse_image_name
 
 class ProgressWindow(tk.Toplevel):
     # Initialize and format the window

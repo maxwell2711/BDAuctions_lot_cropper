@@ -3,8 +3,8 @@ import re
 import csv
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from ..io_utils import parse_image_name, group_images_by_lot, compute_export_renames_for_lot, normalize_output_dir
-from ..runtime import on_root_close
+from autocropper.io_utils import parse_image_name, group_images_by_lot, compute_export_renames_for_lot, normalize_output_dir
+from autocropper.runtime import on_root_close
 
 # ---- CSV column map (0-based) ----
 LOT_COL              = 0  # col 1

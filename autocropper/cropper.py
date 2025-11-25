@@ -1,7 +1,7 @@
 import os
 import cv2
 import numpy as np
-from .model import get_model
+from autocropper.model import get_model
 
 # Auto cropping function which loads image from the folder, predicts
 # the location of objects and combines all boxes into one rectangle

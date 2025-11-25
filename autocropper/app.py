@@ -1,7 +1,7 @@
 import tkinter as tk
 import sv_ttk
-from .runtime import on_root_close, stop_event
-from .gui.rootgui import CropperGUI
+from autocropper.runtime import on_root_close, stop_event
+from autocropper.gui.rootgui import CropperGUI
 
 # Entry point for the program
 def main():

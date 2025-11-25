@@ -1,4 +1,5 @@
 import os
+import sys
 import tkinter as tk
 from tkinter import messagebox
 from ultralytics import YOLO
@@ -14,7 +15,12 @@ def get_model():
     if _model_singleton is not None:
         return _model_singleton
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Figure out where we are (normal script vs PyInstaller bundle)
+    if getattr(sys, "frozen", False):
+        # Running from PyInstaller bundle
+        base_dir = sys._MEIPASS
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(base_dir, MODEL_FILENAME)
 
     # Try loading the model (on GPU hopefully)

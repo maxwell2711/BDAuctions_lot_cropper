@@ -1,10 +1,10 @@
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from ..io_utils import group_images_by_lot, numeric_first_sort, normalize_output_dir, compute_already_cropped_lots
-from ..worker import run_cropper
-from .review import ReviewController
-from .exporter import ExportWindow
+from autocropper.io_utils import group_images_by_lot, numeric_first_sort, normalize_output_dir, compute_already_cropped_lots
+from autocropper.worker import run_cropper
+from autocropper.gui.review import ReviewController
+from autocropper.gui.exporter import ExportWindow
 
 class CropperGUI:
     def __init__(self, root):
