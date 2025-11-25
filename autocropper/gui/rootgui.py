@@ -10,7 +10,7 @@ class CropperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Auto Cropper")
-        self.root.geometry("540x240")
+        self.root.geometry("480x160")
 
         self.input_dir = tk.StringVar()
         self.output_dir = tk.StringVar()
