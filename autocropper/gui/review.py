@@ -1,6 +1,6 @@
 import os, shutil, tkinter as tk
 import gc
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from autocropper.io_utils import sort_paths_by_index, display_order_for_path, parse_image_name, _target_name, _apply_renames
 from autocropper.cropper import auto_crop_detected_objects
@@ -26,6 +26,8 @@ class ReviewController:
             on_next_lot=self.next,
             on_export_open=self.on_export_open,
             lot_list=self.lot_list,
+            grouped_input=self.gi,
+            grouped_output=self.go
         )
 
     def open_idx(self, i):
@@ -38,13 +40,17 @@ class ReviewController:
 
 class LotReviewWindow(tk.Toplevel):
     def __init__(self, master, lot_number, before_paths, after_paths,
-                 on_prev_lot, on_next_lot, on_export_open, lot_list):
+                 on_prev_lot, on_next_lot, on_export_open, lot_list,
+                 grouped_input=None, grouped_output=None):
         super().__init__(master)
         self.master = master
         self.title(f"Lot {lot_number} — Review")
         self.lot_number = str(lot_number)
         self.before_paths = sort_paths_by_index(before_paths)
         self.after_paths  = sort_paths_by_index(after_paths)
+        # store full maps so we can save across all lots on close
+        self.gi = grouped_input or {}
+        self.go = grouped_output or {}
         self.on_prev_lot = on_prev_lot
         self.on_next_lot = on_next_lot
         self.on_export_open = on_export_open
@@ -167,6 +173,16 @@ class LotReviewWindow(tk.Toplevel):
         self.focus_force()
 
     def _done_review(self):
+        save_resp = messagebox.askyesno(
+                "Save Copy?",
+                "Would you like to save reviewed images to a new folder?"
+        )
+        if save_resp:
+            save_to_folder = filedialog.askdirectory(
+                title="Select folder to save reviewed images"
+            )
+        if save_to_folder:
+            self._copy_reviewed_images(save_to_folder)
         try:
             self.destroy()
         finally:
@@ -209,10 +225,26 @@ class LotReviewWindow(tk.Toplevel):
     def _on_close(self):
         resp = messagebox.askyesnocancel(
             "Finish Review",
-            "Would you like to proceed to the Export step?\n\nNo will exit program\nCancel will stay here"
+            "Would you like to proceed to the Export step?\n\nYes = Export\nNo = Exit\nCancel = Stay"
         )
         if resp is None:
             return
+        
+        # Optionally save to a new folder before proceeding
+        save_to_folder = None
+        if resp or resp is False:  # True (Export) or False (Exit)
+            save_resp = messagebox.askyesno(
+                "Save Copy?",
+                "Would you like to save reviewed images to a new folder?"
+            )
+            if save_resp:
+                save_to_folder = filedialog.askdirectory(
+                    title="Select folder to save reviewed images"
+                )
+        
+        if save_to_folder:
+            self._copy_reviewed_images(save_to_folder)
+        
         if resp is True:
             self._disable_global_scroll()
             self._clear_image_refs(self.left_frame)
@@ -228,6 +260,37 @@ class LotReviewWindow(tk.Toplevel):
             try: self.destroy()
             finally:
                 on_root_close(self.master)
+
+    def _copy_reviewed_images(self, dest_folder):
+        """Copy all AFTER images for the review session into a single folder.
+
+        Filenames are kept as-is. If a file with the same name already exists in
+        the destination it will be skipped (no renaming/overwriting).
+        """
+        try:
+            os.makedirs(dest_folder, exist_ok=True)
+
+            total_copied = 0
+
+            # Iterate every lot in the current review session and copy its AFTER images
+            for lot in self.lot_list:
+                after_paths = sort_paths_by_index(self.go.get(lot, []))
+                for src in after_paths:
+                    if not os.path.exists(src):
+                        continue
+                    base = os.path.basename(src)
+                    dest_path = os.path.join(dest_folder, base)
+
+
+                    shutil.copy2(src, dest_path)
+                    total_copied += 1
+
+            messagebox.showinfo(
+                "Save Complete",
+                f"Copied {total_copied} images."
+            )
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to copy images:\n{e}")
 
     def set_lot(self, lot_number, before_paths, after_paths):
         self.lot_number = str(lot_number)
@@ -348,7 +411,7 @@ class LotReviewWindow(tk.Toplevel):
             new_thumb_w = 80  # absolute minimum
         else:
             new_thumb_w = (side_frame_width - total_padding) // self.COLS
-            new_thumb_w = min(280, max(100, new_thumb_w))  # clamp between 100-280
+            new_thumb_w = min(320, max(100, new_thumb_w))  # clamp between 100-320
         
         new_thumb_h = new_thumb_w  # square thumbnails
         
