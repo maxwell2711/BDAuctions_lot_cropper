@@ -281,15 +281,33 @@ def compute_already_cropped_lots(input_dir: str, output_dir: str) -> Set[str]:
     """
     input_groups = group_images_by_lot(input_dir)
     output_groups = group_images_by_lot(output_dir)
-    
+
+    # read reviewed entries (one-per-line basenames) from output_dir/reviewed.txt
+    reviewed_file = os.path.join(output_dir, "reviewed.txt")
+    reviewed = set()
+    try:
+        with open(reviewed_file, "r", encoding="utf-8") as fh:
+            for ln in fh:
+                ln = ln.strip()
+                if ln:
+                    reviewed.add(os.path.basename(ln))
+    except FileNotFoundError:
+        pass
+
     done: Set[str] = set()
-    
+
     for lot, input_files in input_groups.items():
         input_count = len(input_files)
-        output_count = len(output_groups.get(lot, []))
-        
-        # If output has as many or more files than input, lot is done
-        if output_count >= input_count:
+
+        # count inputs that are either present in output or listed in reviewed file
+        accounted = 0
+        out_files_for_lot = {os.path.basename(p) for p in output_groups.get(lot, [])}
+        for p in input_files:
+            base = os.path.basename(p)
+            if base in out_files_for_lot or base in reviewed:
+                accounted += 1
+
+        if accounted == input_count:
             done.add(lot)
-    
+
     return done

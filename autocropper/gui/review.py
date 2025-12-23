@@ -8,13 +8,14 @@ from autocropper.gui.crop_tool import CropTool
 from autocropper.runtime import on_root_close
 
 class ReviewController:
-    def __init__(self, root, lot_list, grouped_input, grouped_output, on_export_open):
+    def __init__(self, root, lot_list, grouped_input, grouped_output, on_export_open, out_dir=None):
         self.root = root
         self.lot_list = lot_list
         self.gi = grouped_input
         self.go = grouped_output
         self.idx = 0
         self.on_export_open = on_export_open
+        self.out_dir = out_dir
 
         lot = self.lot_list[self.idx]
         self.win = LotReviewWindow(
@@ -27,7 +28,8 @@ class ReviewController:
             on_export_open=self.on_export_open,
             lot_list=self.lot_list,
             grouped_input=self.gi,
-            grouped_output=self.go
+            grouped_output=self.go,
+            out_dir=self.out_dir,
         )
 
     def open_idx(self, i):
@@ -41,7 +43,7 @@ class ReviewController:
 class LotReviewWindow(tk.Toplevel):
     def __init__(self, master, lot_number, before_paths, after_paths,
                  on_prev_lot, on_next_lot, on_export_open, lot_list,
-                 grouped_input=None, grouped_output=None):
+                 grouped_input=None, grouped_output=None, out_dir=None):
         super().__init__(master)
         self.master = master
         self.title(f"Lot {lot_number} — Review")
@@ -51,6 +53,7 @@ class LotReviewWindow(tk.Toplevel):
         # store full maps so we can save across all lots on close
         self.gi = grouped_input or {}
         self.go = grouped_output or {}
+        self.out_dir = out_dir
         self.on_prev_lot = on_prev_lot
         self.on_next_lot = on_next_lot
         self.on_export_open = on_export_open
@@ -76,6 +79,8 @@ class LotReviewWindow(tk.Toplevel):
         ent = ttk.Entry(jump_box, textvariable=self._jump_var, width=10)
         ent.pack(side="left")
         ent.bind("<Return>", lambda e: self._jump_to_lot())
+        ent.bind("<FocusIn>", lambda e: self._unbind_hotkeys())
+        ent.bind("<FocusOut>", lambda e: self._bind_hotkeys())
 
         ttk.Button(jump_box, text="Go", command=self._jump_to_lot).pack(side="left", padx=(4, 0))
         ttk.Button(self.topbar, text="⟲ Rotate Left",  command=lambda: self._rotate_selected(-90)).pack(side="right", padx=4)
@@ -112,11 +117,13 @@ class LotReviewWindow(tk.Toplevel):
         ttk.Label(self.left_frame, text="BEFORE", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
         ttk.Label(self.right_frame, text="AFTER (click to select, double-click to crop)", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
 
-        ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected).pack(pady=(350, 6))
+        ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected).pack(pady=(300, 6))
         ttk.Button(self.center_bar, text="↩↩ Revert All",     width=18, command=self._revert_all).pack(pady=6)
         ttk.Separator(self.center_bar, orient="horizontal").pack(fill="x", pady=6)
         ttk.Button(self.center_bar, text="♻ Recrop All",      width=18, command=self._recrop_all).pack(pady=6)
         ttk.Button(self.center_bar, text="♻ Recrop Selected", width=18, command=self._recrop_selected).pack(pady=6)
+        ttk.Separator(self.center_bar, orient="horizontal").pack(fill="x", pady=6)
+        ttk.Button(self.center_bar, text="🗑 Delete Selected", width=18, command=self._delete_selected).pack(pady=6)
 
         self._build_group(self.left_frame,  self.before_paths, selectable=False, is_after=False)
         self._build_group(self.right_frame, self.after_paths,  selectable=True,  is_after=True)
@@ -126,51 +133,68 @@ class LotReviewWindow(tk.Toplevel):
         # Bottom nav
         self.bot = tk.Frame(self)
         self.bot.pack(fill="x", pady=8)
-        ttk.Button(self.bot, text="Next Lot ⟶", command=self.on_next_lot).pack(side="right", padx=10)
-        ttk.Button(self.bot, text="⟵ Prev Lot", command=self.on_prev_lot).pack(side="right", padx=4)
+        ttk.Button(self.bot, text="Next Lot ⟶", command=self._mark_and_next).pack(side="right", padx=10)
+        ttk.Button(self.bot, text="⟵ Prev Lot", command=self._mark_and_prev).pack(side="right", padx=4)
         ttk.Button(self.bot, text="Done Review", command=self._done_review).pack(side="right", padx=4)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.minsize(1024, 720)
         self.after(0, self._autosize_to_content)
 
-        # Hotkey bindings
-        self.bind("<Left>",  lambda e: self._rotate_selected(-90))
-        self.bind("<KP_Left>",  lambda e: self._rotate_selected(-90))
-        self.bind("<KP_4>",  lambda e: self._rotate_selected(-90))
-        self.bind("4",  lambda e: self._rotate_selected(-90))
-        self.bind("<Right>", lambda e: self._rotate_selected(90))
-        self.bind("<KP_Right>", lambda e: self._rotate_selected(90))
-        self.bind("<KP_6>", lambda e: self._rotate_selected(90))
-        self.bind("6", lambda e: self._rotate_selected(90))
-        self.bind("<Up>", lambda e: self._selected_image_index(1))
-        self.bind("<KP_Up>", lambda e: self._selected_image_index(1))
-        self.bind("<KP_8>", lambda e: self._selected_image_index(1))
-        self.bind("8", lambda e: self._selected_image_index(1))
-        self.bind("<Down>", lambda e: self._selected_image_index(-1))
-        self.bind("<KP_Down>", lambda e: self._selected_image_index(-1))
-        self.bind("<KP_2>", lambda e: self._selected_image_index(-1))
-        self.bind("2", lambda e: self._selected_image_index(-1))
-        self.bind("<R>", lambda e: self._revert_selected())
-        self.bind("<r>", lambda e: self._revert_selected())
-        self.bind("<KP_3>", lambda e: self._revert_selected())
-        self.bind("3", lambda e: self._revert_selected())
-        self.bind("<KP_Next>", lambda e: self._revert_selected())
-        self.bind("<N>", lambda e: self.on_next_lot())
-        self.bind("<n>", lambda e: self.on_next_lot())
-        self.bind("<KP_Prior>", lambda e: self.on_next_lot())
-        self.bind("<KP_9>", lambda e: self.on_next_lot())
-        self.bind("9", lambda e: self.on_next_lot())
-        self.bind("<P>", lambda e: self.on_prev_lot())
-        self.bind("<p>", lambda e: self.on_prev_lot())
-        self.bind("<KP_Home>", lambda e: self.on_prev_lot())
-        self.bind("<KP_7>", lambda e: self.on_prev_lot())
-        self.bind("7", lambda e: self.on_prev_lot())
-        self.bind("<C>", lambda e: self._crop_selected())
-        self.bind("<c>", lambda e: self._crop_selected())
-        self.bind("<KP_5>", lambda e: self._crop_selected())
-        self.bind("5", lambda e: self._crop_selected())
+        # Hotkey bindings (stored so we can unbind when jump-entry has focus)
+        self._hotkey_bindings = [
+            ("<Left>",  lambda e: self._rotate_selected(-90)),
+            ("<KP_Left>",  lambda e: self._rotate_selected(-90)),
+            ("<KP_4>",  lambda e: self._rotate_selected(-90)),
+            ("4",  lambda e: self._rotate_selected(-90)),
+            ("<Right>", lambda e: self._rotate_selected(90)),
+            ("<KP_Right>", lambda e: self._rotate_selected(90)),
+            ("<KP_6>", lambda e: self._rotate_selected(90)),
+            ("6", lambda e: self._rotate_selected(90)),
+            ("<Up>", lambda e: self._selected_image_index(1)),
+            ("<KP_Up>", lambda e: self._selected_image_index(1)),
+            ("<KP_8>", lambda e: self._selected_image_index(1)),
+            ("8", lambda e: self._selected_image_index(1)),
+            ("<Down>", lambda e: self._selected_image_index(-1)),
+            ("<KP_Down>", lambda e: self._selected_image_index(-1)),
+            ("<KP_2>", lambda e: self._selected_image_index(-1)),
+            ("2", lambda e: self._selected_image_index(-1)),
+            ("<R>", lambda e: self._revert_selected()),
+            ("<r>", lambda e: self._revert_selected()),
+            ("<KP_3>", lambda e: self._revert_selected()),
+            ("3", lambda e: self._revert_selected()),
+            ("<KP_Next>", lambda e: self._revert_selected()),
+            ("<N>", lambda e: self._mark_and_next()),
+            ("<n>", lambda e: self._mark_and_next()),
+            ("<KP_Prior>", lambda e: self._mark_and_next()),
+            ("<KP_9>", lambda e: self._mark_and_next()),
+            ("9", lambda e: self._mark_and_next()),
+            ("<P>", lambda e: self._mark_and_prev()),
+            ("<p>", lambda e: self._mark_and_prev()),
+            ("<KP_Home>", lambda e: self._mark_and_prev()),
+            ("<KP_7>", lambda e: self._mark_and_prev()),
+            ("7", lambda e: self._mark_and_prev()),
+            ("<C>", lambda e: self._crop_selected()),
+            ("<c>", lambda e: self._crop_selected()),
+            ("<KP_5>", lambda e: self._crop_selected()),
+            ("5", lambda e: self._crop_selected()),
+        ]
+        self._bind_hotkeys()
         self.focus_force()
+
+    def _bind_hotkeys(self):
+        for seq, handler in getattr(self, "_hotkey_bindings", []):
+            try:
+                self.bind(seq, handler)
+            except Exception:
+                pass
+
+    def _unbind_hotkeys(self):
+        for seq, _ in getattr(self, "_hotkey_bindings", []):
+            try:
+                self.unbind(seq)
+            except Exception:
+                pass
 
     def _done_review(self):
         save_resp = messagebox.askyesno(
@@ -198,15 +222,26 @@ class LotReviewWindow(tk.Toplevel):
         target = (self._jump_var.get() or "").strip()
         if not target:
             return
-        # Exact match on lot id as keyed in lot_list (supports '6', '6a', etc.)
+        # Exact match on lot id as keyed in visible lot_list (supports '6', '6a', etc.)
+        idx = None
         try:
             idx = self.lot_list.index(target)
         except ValueError:
-            # fallback: case-insensitive match
+            # fallback: case-insensitive match within visible list
             lowered = [s.lower() for s in self.lot_list]
-            try:
+            if target.lower() in lowered:
                 idx = lowered.index(target.lower())
-            except ValueError:
+            else:
+                # not in visible list: try to find in full input groups (allows jumping to already-reviewed lots)
+                all_keys = list(self.gi.keys())
+                lowered_all = [s.lower() for s in all_keys]
+                if target.lower() in lowered_all:
+                    lot = all_keys[lowered_all.index(target.lower())]
+                    # show that lot locally
+                    self.master.after(0, lambda: self.master.focus_force())
+                    self._jump_var.set("")
+                    self.set_lot(lot, self.gi.get(lot, []), self.go.get(lot, []))
+                    return
                 messagebox.showinfo("Jump", f"Lot '{target}' not found.")
                 return
         # swap to that lot
@@ -757,3 +792,85 @@ class LotReviewWindow(tk.Toplevel):
     def _open_crop_tool(self, idx):
         self._select_after(idx)
         self._crop_selected()
+
+    # ----- Reviewed-file helpers -----
+    def _reviewed_file_path(self):
+        if not self.out_dir:
+            return None
+        return os.path.join(self.out_dir, "reviewed.txt")
+
+    def _append_reviewed(self, basenames):
+        """Append basenames (iterable) to reviewed.txt, avoiding duplicates."""
+        rf = self._reviewed_file_path()
+        if not rf:
+            return
+        existing = set()
+        try:
+            with open(rf, "r", encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if ln:
+                        existing.add(os.path.basename(ln))
+        except FileNotFoundError:
+            pass
+
+        to_add = [b for b in basenames if b not in existing]
+        if not to_add:
+            return
+        try:
+            with open(rf, "a", encoding="utf-8") as fh:
+                for b in to_add:
+                    fh.write(b + "\n")
+        except Exception:
+            pass
+
+    def _mark_current_lot_reviewed(self):
+        """Mark all input images for current lot as reviewed (record basenames)."""
+        # prefer before_paths as canonical input list; if absent, use after_paths
+        sources = self.before_paths if self.before_paths else self.after_paths
+        basenames = [os.path.basename(p) for p in sources]
+        self._append_reviewed(basenames)
+
+    def _mark_and_next(self, *a):
+        try:
+            self._mark_current_lot_reviewed()
+        except Exception:
+            pass
+        if callable(self.on_next_lot):
+            self.on_next_lot()
+
+    def _mark_and_prev(self, *a):
+        try:
+            self._mark_current_lot_reviewed()
+        except Exception:
+            pass
+        if callable(self.on_prev_lot):
+            self.on_prev_lot()
+
+    def _delete_selected(self):
+        if not self._require_selection(): return
+        idx = self._selected_idx
+        path = self.after_paths[idx]
+        base = os.path.basename(path)
+        resp = messagebox.askyesno("Delete", f"Delete {base}? This will skip it in future runs.")
+        if not resp:
+            return
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            messagebox.showerror("Delete", f"Failed to delete: {e}")
+            return
+
+        # record as reviewed (so it will be skipped in future)
+        try:
+            self._append_reviewed([base])
+        except Exception:
+            pass
+
+        # remove from in-memory list and rebuild UI
+        try:
+            del self.after_paths[idx]
+        except Exception:
+            pass
+        self._rebuild_after()
