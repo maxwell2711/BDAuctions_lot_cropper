@@ -5,7 +5,58 @@ from PIL import Image, ImageTk
 from autocropper.io_utils import sort_paths_by_index, display_order_for_path, parse_image_name, _target_name, _apply_renames
 from autocropper.cropper import auto_crop_detected_objects
 from autocropper.gui.crop_tool import CropTool
+from autocropper.gui.auctionFlex_instructions import AuctionFlexInstructionsWindow
 from autocropper.runtime import on_root_close
+
+
+# Lightweight tooltip helper for hover hints
+class Tooltip:
+    def __init__(self, widget, text, wait=400):
+        self.widget = widget
+        self.text = text
+        self.wait = wait
+        self.tipwin = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<Motion>", self._motion)
+
+    def _schedule(self, _e=None):
+        self._after_id = self.widget.after(self.wait, self._show)
+
+    def _show(self):
+        if self.tipwin:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        self.tipwin = tk.Toplevel(self.widget)
+        self.tipwin.wm_overrideredirect(True)
+        lbl = tk.Label(self.tipwin, text=self.text, justify="left",
+                       background="#ffffe0", relief="solid", borderwidth=1,
+                       padx=6, pady=3)
+        lbl.pack()
+        try:
+            self.tipwin.wm_geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def _hide(self, _e=None):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        if self.tipwin:
+            try:
+                self.tipwin.destroy()
+            except Exception:
+                pass
+            self.tipwin = None
+
+    def _motion(self, _e=None):
+        # keep tooltip scheduled while moving over widget
+        return
 
 class ReviewController:
     def __init__(self, root, lot_list, grouped_input, grouped_output, on_export_open, out_dir=None):
@@ -82,10 +133,21 @@ class LotReviewWindow(tk.Toplevel):
         ent.bind("<FocusIn>", lambda e: self._unbind_hotkeys())
         ent.bind("<FocusOut>", lambda e: self._bind_hotkeys())
 
-        ttk.Button(jump_box, text="Go", command=self._jump_to_lot).pack(side="left", padx=(4, 0))
-        ttk.Button(self.topbar, text="⟲ Rotate Left",  command=lambda: self._rotate_selected(-90)).pack(side="right", padx=4)
-        ttk.Button(self.topbar, text="⟳ Rotate Right", command=lambda: self._rotate_selected(90)).pack(side="right", padx=4)
-        ttk.Button(self.topbar, text="✂ Crop",         command=self._crop_selected).pack(side="right", padx=4)
+        go_btn = ttk.Button(jump_box, text="Go", command=self._jump_to_lot)
+        go_btn.pack(side="left", padx=(4, 0))
+        Tooltip(go_btn, "Go to the entered lot number, click to focus typing (hotkey: Enter)")
+
+        rotate_l_btn = ttk.Button(self.topbar, text="⟲ Rotate Left",  command=lambda: self._rotate_selected(-90))
+        rotate_l_btn.pack(side="right", padx=4)
+        Tooltip(rotate_l_btn, "Rotate selected image left (hotkey: 4 or Left arrow)")
+
+        rotate_r_btn = ttk.Button(self.topbar, text="⟳ Rotate Right", command=lambda: self._rotate_selected(90))
+        rotate_r_btn.pack(side="right", padx=4)
+        Tooltip(rotate_r_btn, "Rotate selected image right (hotkey: 6 or Right arrow)")
+
+        crop_btn = ttk.Button(self.topbar, text="✂ Crop",         command=self._crop_selected)
+        crop_btn.pack(side="right", padx=4)
+        Tooltip(crop_btn, "Open crop tool for selected image (hotkey: C or 5; double-click image to open)")
 
         # Middle scrollable area
         mid = ttk.Frame(self)
@@ -117,13 +179,29 @@ class LotReviewWindow(tk.Toplevel):
         ttk.Label(self.left_frame, text="BEFORE", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
         ttk.Label(self.right_frame, text="AFTER (click to select, double-click to crop)", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=self.COLS, pady=(0, 8))
 
-        ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected).pack(pady=(300, 6))
-        ttk.Button(self.center_bar, text="↩↩ Revert All",     width=18, command=self._revert_all).pack(pady=6)
+        revert_sel_btn = ttk.Button(self.center_bar, text="↩ Revert Selected", width=18, command=self._revert_selected)
+        revert_sel_btn.pack(pady=(300, 6))
+        Tooltip(revert_sel_btn, "Revert the selected AFTER image to the original BEFORE image (hotkey: R or 3)")
+
+        revert_all_btn = ttk.Button(self.center_bar, text="↩↩ Revert All",     width=18, command=self._revert_all)
+        revert_all_btn.pack(pady=6)
+        Tooltip(revert_all_btn, "Revert all AFTER images in this lot to their BEFORE sources (no hotkey assigned)")
+
         ttk.Separator(self.center_bar, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Button(self.center_bar, text="♻ Recrop All",      width=18, command=self._recrop_all).pack(pady=6)
-        ttk.Button(self.center_bar, text="♻ Recrop Selected", width=18, command=self._recrop_selected).pack(pady=6)
+
+        recrop_all_btn = ttk.Button(self.center_bar, text="♻ Recrop All",      width=18, command=self._recrop_all)
+        recrop_all_btn.pack(pady=6)
+        Tooltip(recrop_all_btn, "Re-run auto-cropping on all AFTER images for this lot (no hotkey assigned)")
+
+        recrop_sel_btn = ttk.Button(self.center_bar, text="♻ Recrop Selected", width=18, command=self._recrop_selected)
+        recrop_sel_btn.pack(pady=6)
+        Tooltip(recrop_sel_btn, "Re-run auto-cropping on the selected image (no hotkey assigned)")
+
         ttk.Separator(self.center_bar, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Button(self.center_bar, text="🗑 Delete Selected", width=18, command=self._delete_selected).pack(pady=6)
+
+        delete_sel_btn = ttk.Button(self.center_bar, text="🗑 Delete Selected", width=18, command=self._delete_selected)
+        delete_sel_btn.pack(pady=6)
+        Tooltip(delete_sel_btn, "Delete the selected AFTER image and mark it reviewed (no hotkey assigned)")
 
         self._build_group(self.left_frame,  self.before_paths, selectable=False, is_after=False)
         self._build_group(self.right_frame, self.after_paths,  selectable=True,  is_after=True)
@@ -133,9 +211,17 @@ class LotReviewWindow(tk.Toplevel):
         # Bottom nav
         self.bot = tk.Frame(self)
         self.bot.pack(fill="x", pady=8)
-        ttk.Button(self.bot, text="Next Lot ⟶", command=self._mark_and_next).pack(side="right", padx=10)
-        ttk.Button(self.bot, text="⟵ Prev Lot", command=self._mark_and_prev).pack(side="right", padx=4)
-        ttk.Button(self.bot, text="Done Review", command=self._done_review).pack(side="right", padx=4)
+        next_btn = ttk.Button(self.bot, text="Next Lot ⟶", command=self._mark_and_next)
+        next_btn.pack(side="right", padx=10)
+        Tooltip(next_btn, "Mark this lot reviewed and go to the next lot (hotkey: N)")
+
+        prev_btn = ttk.Button(self.bot, text="⟵ Prev Lot", command=self._mark_and_prev)
+        prev_btn.pack(side="right", padx=4)
+        Tooltip(prev_btn, "Mark this lot reviewed and go to the previous lot (hotkey: P)")
+
+        done_btn = ttk.Button(self.bot, text="Done Review", command=self._done_review)
+        done_btn.pack(side="right", padx=4)
+        Tooltip(done_btn, "Finish reviewing and return to the main window (no hotkey assigned)")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.minsize(1024, 720)
@@ -199,19 +285,42 @@ class LotReviewWindow(tk.Toplevel):
     def _done_review(self):
         save_resp = messagebox.askyesno(
                 "Save Copy?",
-                "Would you like to save reviewed images to a new folder?"
+                "Would you like to mark the current lot as reviewed?"
         )
+        
+        if save_resp is None or save_resp is False:
+            self._disable_global_scroll()
+            self._clear_image_refs(self.left_frame)
+            self._clear_image_refs(self.right_frame)
+            try:
+                self.destroy()
+            finally:
+                # Return to main/root window (do not open Export for now)
+                try:
+                    self.master.deiconify()
+                except Exception:
+                    pass
+                # Show AuctionFlex import instructions
+                try:
+                    AuctionFlexInstructionsWindow(self.master, out_dir=self.out_dir)
+                except Exception as e:
+                    print(f"Failed to open AuctionFlex instructions: {e}")
+            return
         if save_resp:
-            save_to_folder = filedialog.askdirectory(
-                title="Select folder to save reviewed images"
-            )
-        if save_to_folder:
-            self._copy_reviewed_images(save_to_folder)
+            self._mark_current_lot_reviewed()
         try:
             self.destroy()
         finally:
-            if callable(self.on_export_open):
-                self.on_export_open(self.lot_list)
+            # Return to main/root window (do not open Export for now)
+            try:
+                self.master.deiconify()
+            except Exception:
+                pass
+            # Show AuctionFlex import instructions
+            try:
+                AuctionFlexInstructionsWindow(self.master, out_dir=self.out_dir)
+            except Exception as e:
+                print(f"Failed to open AuctionFlex instructions: {e}")
 
     def _rotate_index(self, idx: int, deg: int):
         # select, then rotate; keeps UI consistent with highlight
@@ -258,43 +367,33 @@ class LotReviewWindow(tk.Toplevel):
             self.set_lot(lot, self.gi.get(lot, []), self.go.get(lot, []))  # needs gi/go if stored
 
     def _on_close(self):
+        # Simplified close: ask to save copy, then return to main window.
         resp = messagebox.askyesnocancel(
             "Finish Review",
-            "Would you like to proceed to the Export step?\n\nYes = Export\nNo = Exit\nCancel = Stay"
+            "Would you like to mark the current lot as reviewed? Cancel to stay."
         )
         if resp is None:
             return
-        
-        # Optionally save to a new folder before proceeding
-        save_to_folder = None
-        if resp or resp is False:  # True (Export) or False (Exit)
-            save_resp = messagebox.askyesno(
-                "Save Copy?",
-                "Would you like to save reviewed images to a new folder?"
-            )
-            if save_resp:
-                save_to_folder = filedialog.askdirectory(
-                    title="Select folder to save reviewed images"
-                )
-        
-        if save_to_folder:
-            self._copy_reviewed_images(save_to_folder)
-        
-        if resp is True:
-            self._disable_global_scroll()
-            self._clear_image_refs(self.left_frame)
-            self._clear_image_refs(self.right_frame)
-            try: self.destroy()
-            finally:
-                if callable(self.on_export_open):
-                    self.on_export_open(self.lot_list)
-        else:
-            self._disable_global_scroll()
-            self._clear_image_refs(self.left_frame)
-            self._clear_image_refs(self.right_frame)
-            try: self.destroy()
-            finally:
-                on_root_close(self.master)
+
+        if resp:
+            self._mark_current_lot_reviewed()
+
+        self._disable_global_scroll()
+        self._clear_image_refs(self.left_frame)
+        self._clear_image_refs(self.right_frame)
+        try:
+            self.destroy()
+        finally:
+            try:
+                self.master.deiconify()
+            except Exception:
+                pass
+            # Show AuctionFlex import instructions after review is done
+            try:
+                AuctionFlexInstructionsWindow(self.master, out_dir=self.out_dir)
+            except Exception as e:
+                print(f"Failed to open AuctionFlex instructions: {e}")
+
 
     def _copy_reviewed_images(self, dest_folder):
         """Copy all AFTER images for the review session into a single folder.
@@ -531,25 +630,30 @@ class LotReviewWindow(tk.Toplevel):
             btn_l = ttk.Button(controls, text="⟲", width=1.5,
                             command=lambda k=i: self._rotate_index(k, -90))
             btn_l.pack(side="left", padx=(0,10))
+            Tooltip(btn_l, "Rotate left (hotkey: 4 or Left arrow)")
 
             # index image up
             btn_up = ttk.Button(controls, text="↑", width=1.5,
                                 command=lambda k=i: self._image_index(k, 1))
             btn_up.pack(side="left", padx=4)
+            Tooltip(btn_up, "Move image up (hotkey: Up arrow or 8)")
 
             # caption in the middle
             cap = tk.Label(controls, text=f"#{order_num}")
             cap.pack(side= "left", padx = (5,5))
+            Tooltip(cap, f"{p} — display order #{order_num}")
 
             # index image down
             btn_up = ttk.Button(controls, text="↓", width=1.5,
                                 command=lambda k=i: self._image_index(k, -1))
             btn_up.pack(side="left", padx=4)
+            Tooltip(btn_up, "Move image down (hotkey: Down arrow or 2)")
 
             # right rotate
             btn_r = ttk.Button(controls, text="⟳", width=1.5,
                             command=lambda k=i: self._rotate_index(k, 90))
             btn_r.pack(side="left", padx=(10,0))
+            Tooltip(btn_r, "Rotate right (hotkey: 6 or Right arrow)")
 
             if is_after:
                 self._after_labels.append((img_label, cap))

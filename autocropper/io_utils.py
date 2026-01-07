@@ -263,51 +263,79 @@ def normalize_output_dir(out_dir: str) -> int:
     return count
 
 
-def compute_already_cropped_lots(input_dir: str, output_dir: str) -> Set[str]:
+def compute_already_cropped_lots(input_dir: str, output_dir: str, include_reviewed: bool = True) -> Set[str]:
     """
     Compare input and output directories to find lots that are already complete.
-    
-    Logic:
-      - For each lot that appears in both input_dir and output_dir:
+
+    If ``include_reviewed`` is True (default) then the function will also consult
+    ``output_dir/reviewed.txt`` — entries listed there count as already-processed
+    (useful for skipping previously-reviewed images). If ``include_reviewed`` is
+    False, the reviewed file is ignored and only files physically present in the
+    output folder are considered.
+
+    Logic (same in both modes):
+      - For each lot that appears in input_dir:
           input_count = number of image files for that lot in input_dir
-          output_count = number of image files for that lot in output_dir
-        
-        If output_count >= input_count:
-            -> that lot is already done (all originals have been cropped)
-        Else:
-            -> that lot is NOT done (new images were added or still processing)
-    
+          accounted = number of those files either present in output_dir or (optionally)
+                     listed in reviewed.txt
+
+        If accounted == input_count: that lot is considered done.
+
     Returns a set of lot IDs that can be skipped.
     """
     input_groups = group_images_by_lot(input_dir)
     output_groups = group_images_by_lot(output_dir)
 
     # read reviewed entries (one-per-line basenames) from output_dir/reviewed.txt
-    reviewed_file = os.path.join(output_dir, "reviewed.txt")
     reviewed = set()
-    try:
-        with open(reviewed_file, "r", encoding="utf-8") as fh:
-            for ln in fh:
-                ln = ln.strip()
-                if ln:
-                    reviewed.add(os.path.basename(ln))
-    except FileNotFoundError:
-        pass
+    if include_reviewed:
+        reviewed_file = os.path.join(output_dir, "reviewed.txt")
+        try:
+            with open(reviewed_file, "r", encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if ln:
+                        reviewed.add(os.path.basename(ln))
+        except FileNotFoundError:
+            pass
 
     done: Set[str] = set()
 
     for lot, input_files in input_groups.items():
         input_count = len(input_files)
 
-        # count inputs that are either present in output or listed in reviewed file
+        # Count inputs that are present in output. If include_reviewed is True,
+        # require that the file is both present in the output folder and
+        # recorded in reviewed.txt (i.e., both conditions must be true).
         accounted = 0
         out_files_for_lot = {os.path.basename(p) for p in output_groups.get(lot, [])}
         for p in input_files:
             base = os.path.basename(p)
-            if base in out_files_for_lot or base in reviewed:
-                accounted += 1
+            if include_reviewed:
+                # Only count files that are both present and listed as reviewed
+                if base in out_files_for_lot and base in reviewed:
+                    accounted += 1
+            else:
+                # For cropping runs we only care about files present in output
+                if base in out_files_for_lot:
+                    accounted += 1
 
         if accounted == input_count:
             done.add(lot)
 
     return done
+
+
+def compute_uncropped_lots(input_dir: str, output_dir: str) -> Set[str]:
+    """
+    Return the set of lot IDs from ``input_dir`` that are NOT yet fully cropped
+    based solely on files present in ``output_dir`` (ignores reviewed.txt).
+
+    This is a convenience wrapper equivalent to calling
+    ``compute_already_cropped_lots(input_dir, output_dir, include_reviewed=False)``
+    and returning the complement (input lots minus done lots).
+    """
+    input_groups = group_images_by_lot(input_dir)
+    done = compute_already_cropped_lots(input_dir, output_dir, include_reviewed=False)
+    # uncropped = lots present in input but not marked done
+    return {lot for lot in input_groups.keys() if lot not in done}
